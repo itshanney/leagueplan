@@ -47,11 +47,12 @@ class LeagueStoreTest {
     // --- load ---
 
     @Test
-    @DisplayName("load() on a missing file creates and returns an empty league")
+    @DisplayName("load() on a missing file creates and returns an empty league at current version")
     void load_createsEmptyLeagueWhenFileAbsent() throws IOException {
         League league = store.load();
         assertTrue(league.divisions().isEmpty());
-        assertEquals(1, league.version());
+        assertTrue(league.fields().isEmpty());
+        assertEquals(2, league.version());
     }
 
     @Test
@@ -78,14 +79,15 @@ class LeagueStoreTest {
         store.save(League.empty());
         League loaded = store.load();
         assertTrue(loaded.divisions().isEmpty());
-        assertEquals(1, loaded.version());
+        assertTrue(loaded.fields().isEmpty());
+        assertEquals(2, loaded.version());
     }
 
     @Test
     @DisplayName("save() and load() round-trips all division fields including UUID")
     void saveAndLoad_roundTripsDivisionFields() throws IOException {
         UUID divId = UUID.randomUUID();
-        store.save(new League(1, List.of(new Division(divId, "Majors", 120, List.of()))));
+        store.save(new League(1, List.of(new Division(divId, "Majors", 120, List.of())), List.of()));
 
         League loaded = store.load();
         assertEquals(1, loaded.divisions().size());
@@ -101,7 +103,7 @@ class LeagueStoreTest {
         UUID teamId = UUID.randomUUID();
         Team team = new Team(teamId, "Blue Jays");
         Division division = new Division(UUID.randomUUID(), "Majors", 120, List.of(team));
-        store.save(new League(1, List.of(division)));
+        store.save(new League(1, List.of(division), List.of()));
 
         List<Team> loadedTeams = store.load().divisions().get(0).teams();
         assertEquals(1, loadedTeams.size());
@@ -118,7 +120,7 @@ class LeagueStoreTest {
             new Division(UUID.randomUUID(), "Coast",  90,  List.of()),
             new Division(UUID.randomUUID(), "T-Ball", 60,  List.of())
         );
-        store.save(new League(1, divisions));
+        store.save(new League(1, divisions, List.of()));
 
         List<Division> loaded = store.load().divisions();
         assertEquals(4, loaded.size());
@@ -132,7 +134,7 @@ class LeagueStoreTest {
     @DisplayName("save() and load() round-trips a division name containing special characters")
     void saveAndLoad_roundTripsSpecialCharactersInName() throws IOException {
         Division division = new Division(UUID.randomUUID(), "T-Ball & Rookie", 60, List.of());
-        store.save(new League(1, List.of(division)));
+        store.save(new League(1, List.of(division), List.of()));
         assertEquals("T-Ball & Rookie", store.load().divisions().get(0).name());
     }
 

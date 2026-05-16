@@ -5,13 +5,21 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
 
-public record League(int version, List<Division> divisions) {
+public record League(int version, List<Division> divisions, List<Field> fields) {
 
-    private static final int CURRENT_VERSION = 1;
+    private static final int CURRENT_VERSION = 2;
+
+    // Normalizes nulls that arise when Jackson deserializes a v1 file (no fields property).
+    public League {
+        divisions = (divisions == null) ? List.of() : divisions;
+        fields = (fields == null) ? List.of() : fields;
+    }
 
     public static League empty() {
-        return new League(CURRENT_VERSION, List.of());
+        return new League(CURRENT_VERSION, List.of(), List.of());
     }
+
+    // --- Division queries ---
 
     public Optional<Division> findDivision(String name) {
         return divisions.stream()
@@ -23,19 +31,52 @@ public record League(int version, List<Division> divisions) {
         return findDivision(name).isPresent();
     }
 
+    // --- Division mutations ---
+
     public League withDivisionAdded(Division division) {
-        return new League(version, Stream.concat(divisions.stream(), Stream.of(division)).toList());
+        return new League(version,
+            Stream.concat(divisions.stream(), Stream.of(division)).toList(),
+            fields);
     }
 
     public League withDivisionReplaced(UUID id, Division replacement) {
-        return new League(version, divisions.stream()
-            .map(d -> d.id().equals(id) ? replacement : d)
-            .toList());
+        return new League(version,
+            divisions.stream().map(d -> d.id().equals(id) ? replacement : d).toList(),
+            fields);
     }
 
     public League withDivisionRemoved(UUID id) {
-        return new League(version, divisions.stream()
-            .filter(d -> !d.id().equals(id))
-            .toList());
+        return new League(version,
+            divisions.stream().filter(d -> !d.id().equals(id)).toList(),
+            fields);
+    }
+
+    // --- Field queries ---
+
+    public Optional<Field> findField(String name) {
+        return fields.stream()
+            .filter(f -> f.name().equalsIgnoreCase(name))
+            .findFirst();
+    }
+
+    public boolean hasField(String name) {
+        return findField(name).isPresent();
+    }
+
+    // --- Field mutations ---
+
+    public League withFieldAdded(Field field) {
+        return new League(version, divisions,
+            Stream.concat(fields.stream(), Stream.of(field)).toList());
+    }
+
+    public League withFieldReplaced(UUID id, Field replacement) {
+        return new League(version, divisions,
+            fields.stream().map(f -> f.id().equals(id) ? replacement : f).toList());
+    }
+
+    public League withFieldRemoved(UUID id) {
+        return new League(version, divisions,
+            fields.stream().filter(f -> !f.id().equals(id)).toList());
     }
 }

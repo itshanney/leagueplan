@@ -19,17 +19,18 @@ class LeagueTest {
     @BeforeEach
     void setUp() {
         majors = new Division(DIV_ID, "Majors", 120, List.of());
-        league = new League(1, List.of(majors));
+        league = new League(1, List.of(majors), List.of());
     }
 
     // --- empty() ---
 
     @Test
-    @DisplayName("empty() returns version 1 with no divisions")
-    void empty_hasVersionOneAndNoDivisions() {
+    @DisplayName("empty() returns current version with no divisions or fields")
+    void empty_hasCurrentVersionAndNoContent() {
         League empty = League.empty();
-        assertEquals(1, empty.version());
+        assertEquals(2, empty.version());
         assertTrue(empty.divisions().isEmpty());
+        assertTrue(empty.fields().isEmpty());
     }
 
     // --- findDivision ---
