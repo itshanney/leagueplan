@@ -64,7 +64,11 @@ public class LeagueStore {
         }
         League league = mapper.readValue(LEAGUE_FILE.toFile(), League.class);
         if (league.version() == 1) {
-            league = new League(2, league.divisions(), league.fields());
+            league = new League(2, league.divisions(), league.fields(), null);
+            save(league);
+        }
+        if (league.version() == 2) {
+            league = new League(3, league.divisions(), league.fields(), null);
             save(league);
         }
         return league;

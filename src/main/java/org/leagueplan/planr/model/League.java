@@ -5,18 +5,17 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
 
-public record League(int version, List<Division> divisions, List<Field> fields) {
+public record League(int version, List<Division> divisions, List<Field> fields, Schedule schedule) {
 
-    private static final int CURRENT_VERSION = 2;
+    private static final int CURRENT_VERSION = 3;
 
-    // Normalizes nulls that arise when Jackson deserializes a v1 file (no fields property).
     public League {
         divisions = (divisions == null) ? List.of() : divisions;
         fields = (fields == null) ? List.of() : fields;
     }
 
     public static League empty() {
-        return new League(CURRENT_VERSION, List.of(), List.of());
+        return new League(CURRENT_VERSION, List.of(), List.of(), null);
     }
 
     // --- Division queries ---
@@ -36,19 +35,19 @@ public record League(int version, List<Division> divisions, List<Field> fields) 
     public League withDivisionAdded(Division division) {
         return new League(version,
             Stream.concat(divisions.stream(), Stream.of(division)).toList(),
-            fields);
+            fields, schedule);
     }
 
     public League withDivisionReplaced(UUID id, Division replacement) {
         return new League(version,
             divisions.stream().map(d -> d.id().equals(id) ? replacement : d).toList(),
-            fields);
+            fields, schedule);
     }
 
     public League withDivisionRemoved(UUID id) {
         return new League(version,
             divisions.stream().filter(d -> !d.id().equals(id)).toList(),
-            fields);
+            fields, schedule);
     }
 
     // --- Field queries ---
@@ -67,16 +66,22 @@ public record League(int version, List<Division> divisions, List<Field> fields) 
 
     public League withFieldAdded(Field field) {
         return new League(version, divisions,
-            Stream.concat(fields.stream(), Stream.of(field)).toList());
+            Stream.concat(fields.stream(), Stream.of(field)).toList(), schedule);
     }
 
     public League withFieldReplaced(UUID id, Field replacement) {
         return new League(version, divisions,
-            fields.stream().map(f -> f.id().equals(id) ? replacement : f).toList());
+            fields.stream().map(f -> f.id().equals(id) ? replacement : f).toList(), schedule);
     }
 
     public League withFieldRemoved(UUID id) {
         return new League(version, divisions,
-            fields.stream().filter(f -> !f.id().equals(id)).toList());
+            fields.stream().filter(f -> !f.id().equals(id)).toList(), schedule);
+    }
+
+    // --- Schedule mutations ---
+
+    public League withSchedule(Schedule newSchedule) {
+        return new League(version, divisions, fields, newSchedule);
     }
 }

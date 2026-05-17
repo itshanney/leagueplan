@@ -21,6 +21,7 @@ dependencies {
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.2'
     implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.17.2'
     annotationProcessor 'info.picocli:picocli-codegen:4.7.6'
+    implementation 'com.google.ortools:ortools-java:9.10.4067'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
