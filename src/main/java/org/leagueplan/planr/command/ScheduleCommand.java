@@ -23,9 +23,13 @@ import picocli.CommandLine.Spec;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
@@ -398,6 +402,8 @@ public class ScheduleCommand implements Runnable {
                     System.out.println("Schedule status: TEAM_SCHEDULE");
                     System.out.println();
                     printTeamScheduleTable(league.teamSchedule().games());
+                    System.out.println();
+                    printTeamScheduleStats(league.teamSchedule().games());
                     return 0;
                 }
 
@@ -601,6 +607,146 @@ public class ScheduleCommand implements Runnable {
         for (TeamGame g : games) {
             System.out.printf(fmt,
                 g.gameNumber(), g.homeTeamName(), g.awayTeamName(), g.divisionName());
+        }
+    }
+
+    static void printTeamScheduleStats(List<TeamGame> games) {
+        LinkedHashMap<String, List<TeamGame>> byDivision = new LinkedHashMap<>();
+        for (TeamGame g : games) {
+            byDivision.computeIfAbsent(g.divisionName(), k -> new ArrayList<>()).add(g);
+        }
+        for (Map.Entry<String, List<TeamGame>> entry : byDivision.entrySet()) {
+            printBalanceBlock(entry.getValue(), entry.getKey());
+            System.out.println();
+            printHeadToHeadBlock(entry.getValue(), entry.getKey());
+            System.out.println();
+        }
+    }
+
+    static void printBalanceBlock(List<TeamGame> games, String divisionName) {
+        Map<String, Integer> homeCount = new HashMap<>();
+        Map<String, Integer> awayCount = new HashMap<>();
+        for (TeamGame g : games) {
+            homeCount.merge(g.homeTeamName(), 1, Integer::sum);
+            awayCount.merge(g.awayTeamName(), 1, Integer::sum);
+            homeCount.putIfAbsent(g.awayTeamName(), 0);
+            awayCount.putIfAbsent(g.homeTeamName(), 0);
+        }
+
+        List<String> teams = new ArrayList<>(new TreeSet<>(homeCount.keySet()));
+
+        int teamW = Math.max(4, teams.stream().mapToInt(String::length).max().orElse(0));
+        int maxHome = homeCount.values().stream().mapToInt(Integer::intValue).max().orElse(0);
+        int maxAway = awayCount.values().stream().mapToInt(Integer::intValue).max().orElse(0);
+        int maxTotal = teams.stream()
+            .mapToInt(t -> homeCount.getOrDefault(t, 0) + awayCount.getOrDefault(t, 0))
+            .max().orElse(0);
+        int maxBalance = teams.stream()
+            .mapToInt(t -> Math.abs(homeCount.getOrDefault(t, 0) - awayCount.getOrDefault(t, 0)))
+            .max().orElse(0);
+
+        int homeW = Math.max(4, String.valueOf(maxHome).length());
+        int awayW = Math.max(4, String.valueOf(maxAway).length());
+        int totalW = Math.max(5, String.valueOf(maxTotal).length());
+        int balW = Math.max(7, maxBalance > 0 ? ("+" + maxBalance).length() : 1);
+
+        System.out.printf("HOME/AWAY BALANCE — %s%n", divisionName);
+        System.out.printf("%-" + teamW + "s  %" + homeW + "s  %" + awayW + "s  %" + totalW + "s  %" + balW + "s%n",
+            "TEAM", "HOME", "AWAY", "TOTAL", "BALANCE");
+        System.out.printf("%-" + teamW + "s  %" + homeW + "s  %" + awayW + "s  %" + totalW + "s  %" + balW + "s%n",
+            "-".repeat(teamW), "-".repeat(homeW), "-".repeat(awayW), "-".repeat(totalW), "-".repeat(balW));
+
+        int totalHome = 0, totalAway = 0;
+        for (String team : teams) {
+            int home = homeCount.getOrDefault(team, 0);
+            int away = awayCount.getOrDefault(team, 0);
+            int total = home + away;
+            int balance = home - away;
+            totalHome += home;
+            totalAway += away;
+
+            String balStr = balance > 0 ? "+" + balance : balance < 0 ? String.valueOf(balance) : "0";
+            String flag = Math.abs(balance) > 1 ? " *" : "";
+
+            System.out.printf("%-" + teamW + "s  %" + homeW + "d  %" + awayW + "d  %" + totalW + "d  %" + balW + "s%s%n",
+                team, home, away, total, balStr, flag);
+        }
+
+        System.out.printf("%-" + teamW + "s  %" + homeW + "d  %" + awayW + "d  %" + totalW + "d%n",
+            "TOTAL", totalHome, totalAway, totalHome + totalAway);
+    }
+
+    static void printHeadToHeadBlock(List<TeamGame> games, String divisionName) {
+        Set<String> teamSet = new TreeSet<>();
+        for (TeamGame g : games) {
+            teamSet.add(g.homeTeamName());
+            teamSet.add(g.awayTeamName());
+        }
+        List<String> teams = new ArrayList<>(teamSet);
+        int n = teams.size();
+
+        Map<String, Integer> teamIndex = new HashMap<>();
+        for (int i = 0; i < n; i++) teamIndex.put(teams.get(i), i);
+
+        int[][] matrix = new int[n][n];
+        for (TeamGame g : games) {
+            matrix[teamIndex.get(g.homeTeamName())][teamIndex.get(g.awayTeamName())]++;
+        }
+
+        int[] rowMode = new int[n];
+        for (int row = 0; row < n; row++) {
+            Map<Integer, Integer> freq = new HashMap<>();
+            for (int col = 0; col < n; col++) {
+                if (col != row) freq.merge(matrix[row][col], 1, Integer::sum);
+            }
+            int maxFreq = freq.values().stream().mapToInt(Integer::intValue).max().orElse(0);
+            rowMode[row] = freq.entrySet().stream()
+                .filter(e -> e.getValue() == maxFreq)
+                .mapToInt(Map.Entry::getKey)
+                .min().orElse(0);
+        }
+
+        String[][] cells = new String[n][n];
+        for (int row = 0; row < n; row++) {
+            for (int col = 0; col < n; col++) {
+                if (row == col) {
+                    cells[row][col] = "—";
+                } else {
+                    String val = String.valueOf(matrix[row][col]);
+                    cells[row][col] = matrix[row][col] != rowMode[row] ? val + "*" : val;
+                }
+            }
+        }
+
+        int rowLabelW = teams.stream().mapToInt(String::length).max().orElse(0);
+        int[] colW = new int[n];
+        for (int col = 0; col < n; col++) {
+            colW[col] = teams.get(col).length();
+            for (int row = 0; row < n; row++) {
+                colW[col] = Math.max(colW[col], cells[row][col].length());
+            }
+        }
+
+        System.out.printf("HEAD-TO-HEAD — %s (row = home team, column = away team)%n", divisionName);
+
+        StringBuilder header = new StringBuilder(" ".repeat(rowLabelW));
+        for (int col = 0; col < n; col++) {
+            header.append("  ").append(String.format("%-" + colW[col] + "s", teams.get(col)));
+        }
+        System.out.println(header);
+
+        StringBuilder sep = new StringBuilder("-".repeat(rowLabelW));
+        for (int col = 0; col < n; col++) {
+            sep.append("  ").append("-".repeat(colW[col]));
+        }
+        System.out.println(sep);
+
+        for (int row = 0; row < n; row++) {
+            StringBuilder line = new StringBuilder(String.format("%-" + rowLabelW + "s", teams.get(row)));
+            for (int col = 0; col < n; col++) {
+                line.append("  ").append(String.format("%-" + colW[col] + "s", cells[row][col]));
+            }
+            System.out.println(line);
         }
     }
 }

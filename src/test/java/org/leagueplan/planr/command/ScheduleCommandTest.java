@@ -3,10 +3,13 @@ package org.leagueplan.planr.command;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.leagueplan.planr.model.TeamGame;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.List;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -461,6 +464,150 @@ class ScheduleCommandTest extends CommandTestBase {
         void exitsOnCorruptedData() throws IOException {
             corruptLeagueFile();
             assertEquals(2, execute("schedule", "view"));
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // schedule view — team schedule stats (balance + head-to-head tables)
+    // -------------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("schedule view — team schedule stats")
+    class ViewStats {
+
+        @Test
+        @DisplayName("balance section appears when in TEAM_SCHEDULE state")
+        void balanceSectionAppearsInTeamScheduleState() {
+            addMinimalLeague();
+            generateTeamSchedule();
+            execute("schedule", "view");
+            assertTrue(stdout().contains("HOME/AWAY BALANCE"));
+        }
+
+        @Test
+        @DisplayName("balance section includes all column headers")
+        void balanceSectionIncludesAllColumnHeaders() {
+            addMinimalLeague();
+            generateTeamSchedule();
+            execute("schedule", "view");
+            String out = stdout();
+            assertTrue(out.contains("HOME/AWAY BALANCE"));
+            assertTrue(out.contains("BALANCE"));
+            assertTrue(out.contains("TOTAL"));
+        }
+
+        @Test
+        @DisplayName("balance table includes a TOTAL row")
+        void balanceTableIncludesTotalRow() {
+            addMinimalLeague();
+            generateTeamSchedule();
+            execute("schedule", "view");
+            assertTrue(stdout().contains("TOTAL"));
+        }
+
+        @Test
+        @DisplayName("balance table flags teams with |balance| > 1 with an asterisk")
+        void balanceTableFlagsTeamsWithImbalanceGreaterThanOne() {
+            // 4 teams + target=N-1=3: circle method guarantees the pivot team gets
+            // 0 home games → |balance|=3 > 1 → that row is flagged with " *"
+            execute("division", "add", "Majors", "--duration", "60", "--target", "3");
+            execute("team", "add", "Majors", "Team A");
+            execute("team", "add", "Majors", "Team B");
+            execute("team", "add", "Majors", "Team C");
+            execute("team", "add", "Majors", "Team D");
+            execute("field", "add", "Riverside Park");
+            execute("config", "set", "--sunrise", "07:00", "--sunset", "20:00",
+                "--start", "2026-06-01", "--end", "2026-06-30");
+            execute("schedule", "generate");
+            execute("schedule", "view");
+            assertTrue(stdout().contains(" *"));
+        }
+
+        @Test
+        @DisplayName("head-to-head section appears when in TEAM_SCHEDULE state")
+        void headToHeadSectionAppearsInTeamScheduleState() {
+            addMinimalLeague();
+            generateTeamSchedule();
+            execute("schedule", "view");
+            assertTrue(stdout().contains("HEAD-TO-HEAD"));
+        }
+
+        @Test
+        @DisplayName("head-to-head diagonal cells show em dash")
+        void headToHeadDiagonalCellsShowEmDash() {
+            addMinimalLeague();
+            generateTeamSchedule();
+            execute("schedule", "view");
+            assertTrue(stdout().contains("—"));
+        }
+
+        @Test
+        @DisplayName("head-to-head flags cells that deviate from the row mode")
+        void headToHeadFlagsCellsDeviatingFromRowMode() {
+            // A hosts B twice, A hosts C once → row A: [—, 2, 1] → mode=1 → 2 is flagged as "2*"
+            UUID divId = UUID.randomUUID();
+            UUID idA = UUID.randomUUID(), idB = UUID.randomUUID(), idC = UUID.randomUUID();
+            List<TeamGame> games = List.of(
+                new TeamGame(UUID.randomUUID(), 1, idA, "A", idB, "B", divId, "Majors", 60),
+                new TeamGame(UUID.randomUUID(), 2, idA, "A", idB, "B", divId, "Majors", 60),
+                new TeamGame(UUID.randomUUID(), 3, idA, "A", idC, "C", divId, "Majors", 60),
+                new TeamGame(UUID.randomUUID(), 4, idB, "B", idC, "C", divId, "Majors", 60)
+            );
+            ScheduleCommand.printHeadToHeadBlock(games, "Majors");
+            assertTrue(stdout().contains("2*"));
+        }
+
+        @Test
+        @DisplayName("--team-schedule flag shows both stats sections in DRAFT state")
+        void teamScheduleFlagShowsStatsSectionsInDraftState() {
+            addMinimalLeague();
+            generateDraft();
+            execute("schedule", "view", "--team-schedule");
+            String out = stdout();
+            assertTrue(out.contains("HOME/AWAY BALANCE"));
+            assertTrue(out.contains("HEAD-TO-HEAD"));
+        }
+
+        @Test
+        @DisplayName("full view in DRAFT state without --team-schedule does not show stats")
+        void fullViewInDraftStateDoesNotShowStats() {
+            addMinimalLeague();
+            generateDraft();
+            execute("schedule", "view");
+            String out = stdout();
+            assertFalse(out.contains("HOME/AWAY BALANCE"));
+            assertFalse(out.contains("HEAD-TO-HEAD"));
+        }
+
+        @Test
+        @DisplayName("--team-schedule flag shows both stats sections in FINALIZED state (AC-15)")
+        void teamScheduleFlagShowsStatsSectionsInFinalizedState() {
+            generateAndFinalizeSchedule();
+            execute("schedule", "view", "--team-schedule");
+            String out = stdout();
+            assertTrue(out.contains("HOME/AWAY BALANCE"),
+                "balance section must appear with --team-schedule on a finalized schedule");
+            assertTrue(out.contains("HEAD-TO-HEAD"),
+                "head-to-head section must appear with --team-schedule on a finalized schedule");
+        }
+
+        @Test
+        @DisplayName("multi-division league shows one balance block per division")
+        void multiDivisionShowsOneBalanceBlockPerDivision() {
+            execute("division", "add", "Majors", "--duration", "60", "--target", "2");
+            execute("division", "add", "AAA", "--duration", "60", "--target", "2");
+            execute("team", "add", "Majors", "Blue Jays");
+            execute("team", "add", "Majors", "Cardinals");
+            execute("team", "add", "AAA", "Red Sox");
+            execute("team", "add", "AAA", "Yankees");
+            execute("field", "add", "Riverside Park");
+            execute("config", "set", "--sunrise", "07:00", "--sunset", "20:00",
+                "--start", "2026-06-01", "--end", "2026-06-30");
+            execute("schedule", "generate");
+            execute("schedule", "view");
+            String out = stdout();
+            assertTrue(out.contains("HOME/AWAY BALANCE — Majors"));
+            assertTrue(out.contains("HOME/AWAY BALANCE — AAA"));
         }
     }
 
