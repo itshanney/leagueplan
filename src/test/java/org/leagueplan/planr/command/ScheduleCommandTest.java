@@ -195,6 +195,15 @@ class ScheduleCommandTest extends CommandTestBase {
         }
 
         @Test
+        @DisplayName("exits 1 when a finalized schedule exists")
+        void failsWhenScheduleIsFinalized() {
+            generateAndFinalizeSchedule();
+            int exit = provideStdinAndExecute("yes\n", "schedule", "assign");
+            assertEquals(1, exit);
+            assertTrue(stderr().contains("finalized schedule"));
+        }
+
+        @Test
         @DisplayName("exits 2 on corrupted league data")
         void exitsOnCorruptedData() throws IOException {
             corruptLeagueFile();
@@ -438,6 +447,15 @@ class ScheduleCommandTest extends CommandTestBase {
         }
 
         @Test
+        @DisplayName("prints irreversibility warning before prompting for confirmation")
+        void printsIrreversibilityWarningBeforePrompt() {
+            addMinimalLeague();
+            generateDraft();
+            provideStdinAndExecute("no\n", "schedule", "finalize");
+            assertTrue(stdout().contains("irreversible"));
+        }
+
+        @Test
         @DisplayName("exits 2 on corrupted league data")
         void exitsOnCorruptedData() throws IOException {
             corruptLeagueFile();
@@ -574,6 +592,55 @@ class ScheduleCommandTest extends CommandTestBase {
             execute("schedule", "game", "override", "1", "--date", "2026-06-14");
             execute("schedule", "view");
             assertTrue(stdout().contains("*"));
+        }
+
+        @Test
+        @DisplayName("shows FINALIZED in status header when schedule is finalized")
+        void showsFinalizedStatusInHeader() {
+            generateAndFinalizeSchedule();
+            execute("schedule", "view");
+            assertTrue(stdout().contains("FINALIZED"));
+        }
+
+        @Test
+        @DisplayName("shows TEAM_SCHEDULE in status header when only team schedule exists")
+        void showsTeamScheduleStatusInHeader() {
+            addMinimalLeague();
+            generateTeamSchedule();
+            execute("schedule", "view");
+            assertTrue(stdout().contains("TEAM_SCHEDULE"));
+        }
+
+        @Test
+        @DisplayName("--team-schedule flag shows matchup table content in FINALIZED state")
+        void showsMatchupTableWithTeamScheduleFlagInFinalizedState() {
+            generateAndFinalizeSchedule();
+            execute("schedule", "view", "--team-schedule");
+            String out = stdout();
+            assertTrue(out.contains("HOME"));
+            assertTrue(out.contains("AWAY"));
+            assertTrue(out.contains("Blue Jays"));
+            assertTrue(out.contains("Cardinals"));
+        }
+
+        @Test
+        @DisplayName("--division filter is case-insensitive")
+        void divisionFilterIsCaseInsensitive() {
+            addMinimalLeague();
+            generateDraft();
+            int exit = execute("schedule", "view", "--division", "majors");
+            assertEquals(0, exit);
+            assertTrue(stdout().contains("Majors"));
+        }
+
+        @Test
+        @DisplayName("--team filter is case-insensitive")
+        void teamFilterIsCaseInsensitive() {
+            addMinimalLeague();
+            generateDraft();
+            int exit = execute("schedule", "view", "--team", "blue jays");
+            assertEquals(0, exit);
+            assertTrue(stdout().contains("Blue Jays"));
         }
 
         @Test
@@ -804,6 +871,147 @@ class ScheduleCommandTest extends CommandTestBase {
             corruptLeagueFile();
             assertEquals(2, execute("schedule", "export"));
         }
+
+        @Test
+        @DisplayName("automatically exports team schedule when in TEAM_SCHEDULE state without --team-schedule flag")
+        void autoExportsTeamScheduleInTeamScheduleState() {
+            addMinimalLeague();
+            generateTeamSchedule();
+            int exit = execute("schedule", "export");
+            assertEquals(0, exit);
+            String out = stdout();
+            assertTrue(out.startsWith("["));
+            assertTrue(out.contains("\"game_number\""));
+            assertTrue(out.contains("\"home_team\""));
+            assertTrue(out.contains("\"away_team\""));
+            assertTrue(out.contains("\"division_name\""));
+        }
+
+        @Test
+        @DisplayName("team schedule export omits date, start_time, and field_name")
+        void teamScheduleExportOmitsDateTimeAndField() {
+            addMinimalLeague();
+            generateDraft();
+            execute("schedule", "export", "--team-schedule");
+            String out = stdout();
+            assertFalse(out.contains("\"date\""));
+            assertFalse(out.contains("\"start_time\""));
+            assertFalse(out.contains("\"field_name\""));
+        }
+
+        @Test
+        @DisplayName("team schedule export includes game_number as a numeric value")
+        void teamScheduleExportIncludesGameNumberAsNumeric() {
+            addMinimalLeague();
+            generateTeamSchedule();
+            execute("schedule", "export");
+            String out = stdout();
+            // game_number must be an unquoted integer in JSON, not a string
+            assertTrue(out.contains("\"game_number\" : 1") || out.contains("\"game_number\":1"),
+                "game_number must be a numeric JSON value, not a string");
+        }
+
+        @Test
+        @DisplayName("team schedule export count is printed to stderr with '(team schedule)' annotation")
+        void teamScheduleExportCountAnnotation() {
+            addMinimalLeague();
+            generateTeamSchedule();
+            execute("schedule", "export");
+            assertTrue(stderr().contains("team schedule"));
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // schedule game edit
+    // -------------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("schedule game edit")
+    class GameEdit {
+
+        @Test
+        @DisplayName("exits 1 when no team schedule has been generated")
+        void failsWhenNoTeamSchedule() {
+            int exit = execute("schedule", "game", "edit", "1", "--home", "Blue Jays");
+            assertEquals(1, exit);
+            assertTrue(stderr().contains("No team schedule found"));
+        }
+
+        @Test
+        @DisplayName("exits 1 when schedule is finalized")
+        void failsWhenScheduleIsFinalized() {
+            generateAndFinalizeSchedule();
+            int exit = execute("schedule", "game", "edit", "1", "--home", "Blue Jays");
+            assertEquals(1, exit);
+            assertTrue(stderr().contains("finalized"));
+        }
+
+        @Test
+        @DisplayName("exits 1 when the specified team is not playing in the game")
+        void failsWhenTeamNotInGame() {
+            addMinimalLeague();
+            generateTeamSchedule();
+            int exit = execute("schedule", "game", "edit", "1", "--home", "Red Sox");
+            assertEquals(1, exit);
+            assertTrue(stderr().contains("not playing in game"));
+        }
+
+        @Test
+        @DisplayName("exits 0 with no-change message when the team is already home")
+        void noChangeWhenTeamAlreadyHome() {
+            addMinimalLeague();
+            generateTeamSchedule();
+            // First call ensures Cardinals is home (swap if needed, or no-op if already home).
+            execute("schedule", "game", "edit", "1", "--home", "Cardinals");
+            // Second call: Cardinals is now home; must be a no-op.
+            int exit = execute("schedule", "game", "edit", "1", "--home", "Cardinals");
+            assertEquals(0, exit);
+            assertTrue(stdout().contains("already the home team"));
+        }
+
+        @Test
+        @DisplayName("swaps home and away when the current away team is designated as home")
+        void swapsHomeAndAway() {
+            addMinimalLeague();
+            generateTeamSchedule();
+            // Pin Blue Jays as home for game 1 (swap from current state if needed).
+            execute("schedule", "game", "edit", "1", "--home", "Blue Jays");
+            // Now swap: Cardinals was away, designate Cardinals as home.
+            int exit = execute("schedule", "game", "edit", "1", "--home", "Cardinals");
+            assertEquals(0, exit);
+            assertTrue(stdout().contains("Cardinals (home)"));
+            assertTrue(stdout().contains("Blue Jays (away)"));
+        }
+
+        @Test
+        @DisplayName("succeeds and exits 0 when schedule is in DRAFT state")
+        void succeedsWhenScheduleIsDraft() {
+            addMinimalLeague();
+            generateDraft();
+            // Exit 0 regardless of whether the call is a swap or a no-op.
+            int exit = execute("schedule", "game", "edit", "1", "--home", "Blue Jays");
+            assertEquals(0, exit);
+        }
+
+        @Test
+        @DisplayName("draft schedule is preserved after editing home/away in DRAFT state")
+        void draftSchedulePreservedAfterEditInDraftState() {
+            addMinimalLeague();
+            generateDraft();
+            execute("schedule", "game", "edit", "1", "--home", "Cardinals");
+            execute("schedule", "status");
+            assertTrue(stdout().contains("DRAFT"),
+                "editing home/away in DRAFT state must not revert the schedule to TEAM_SCHEDULE");
+        }
+
+        @Test
+        @DisplayName("exits 2 on corrupted league data")
+        void exitsOnCorruptedData() throws IOException {
+            corruptLeagueFile();
+            int exit = execute("schedule", "game", "edit", "1", "--home", "Blue Jays");
+            assertEquals(2, exit);
+            assertTrue(stderr().contains("Failed to access league data"));
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -917,6 +1125,28 @@ class ScheduleCommandTest extends CommandTestBase {
                 "--date", "2026-06-07", "--field", "Riverside Park");
 
             assertTrue(stderr().contains("Warning") || stdout().contains("updated"));
+        }
+
+        @Test
+        @DisplayName("saves successfully when date is outside the season window (no constraint re-validation)")
+        void succeedsWithOutOfSeasonDate() {
+            generateAndFinalizeSchedule();
+            // Season window is 2026-06-01 to 2026-06-30; 2025-01-01 is well outside it.
+            int exit = execute("schedule", "game", "override", "1", "--date", "2025-01-01");
+            assertEquals(0, exit);
+            assertTrue(stdout().contains("updated"));
+        }
+
+        @Test
+        @DisplayName("overriding multiple fields in one call produces a single updated confirmation")
+        void overridingMultipleFieldsSucceeds() {
+            generateAndFinalizeSchedule();
+            int exit = execute("schedule", "game", "override", "1",
+                "--date", "2026-07-04",
+                "--start", "10:00",
+                "--home", "Cardinals");
+            assertEquals(0, exit);
+            assertTrue(stdout().contains("updated"));
         }
 
         @Test

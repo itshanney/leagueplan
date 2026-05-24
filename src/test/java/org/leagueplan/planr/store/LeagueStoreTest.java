@@ -1,6 +1,7 @@
 package org.leagueplan.planr.store;
 
 import org.leagueplan.planr.model.Division;
+import org.leagueplan.planr.model.Field;
 import org.leagueplan.planr.model.League;
 import org.leagueplan.planr.model.Team;
 import org.junit.jupiter.api.AfterEach;
@@ -8,7 +9,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
@@ -195,6 +198,109 @@ class LeagueStoreTest {
         assertEquals(4, loaded.version());
         assertTrue(loaded.fields().isEmpty());
         assertNull(loaded.schedule());
+    }
+
+    @Test
+    @DisplayName("load() migrates a v3 file to v4 with empty blocks and dateOverrides on each field")
+    void load_migratesV3ToV4ClearingFieldCollections() throws IOException {
+        UUID fieldId = UUID.randomUUID();
+        // v3 fields did not have blocks/dateOverrides; unknown keys are silently dropped by Jackson.
+        String v3Json = """
+            {
+              "version": 3,
+              "divisions": [],
+              "fields": [
+                {
+                  "id": "%s",
+                  "name": "Riverside Park",
+                  "address": null,
+                  "availabilityWindows": [{"date": "2026-06-01", "start": "09:00", "end": "18:00"}]
+                }
+              ]
+            }
+            """.formatted(fieldId);
+        Files.createDirectories(DATA_DIR);
+        Files.writeString(LEAGUE_FILE, v3Json);
+
+        League loaded = store.load();
+        assertEquals(4, loaded.version());
+        assertEquals(1, loaded.fields().size());
+        Field field = loaded.fields().get(0);
+        assertEquals(fieldId, field.id());
+        assertEquals("Riverside Park", field.name());
+        assertTrue(field.blocks().isEmpty());
+        assertTrue(field.dateOverrides().isEmpty());
+    }
+
+    @Test
+    @DisplayName("load() prints a migration warning to stderr when upgrading a pre-v4 file")
+    void load_printsMigrationWarningToStderrOnPreV4File() throws IOException {
+        String v3Json = """
+            {
+              "version": 3,
+              "divisions": [],
+              "fields": []
+            }
+            """;
+        Files.createDirectories(DATA_DIR);
+        Files.writeString(LEAGUE_FILE, v3Json);
+
+        ByteArrayOutputStream errContent = new ByteArrayOutputStream();
+        PrintStream originalErr = System.err;
+        System.setErr(new PrintStream(errContent));
+        try {
+            store.load();
+        } finally {
+            System.setErr(originalErr);
+        }
+
+        assertTrue(errContent.toString().contains("Field availability windows"));
+    }
+
+    @Test
+    @DisplayName("load() does not print the migration warning when loading a natively-created v4 file")
+    void load_noPrintWarningForNativeV4File() throws IOException {
+        store.save(League.empty()); // creates a v4 file directly
+
+        ByteArrayOutputStream errContent = new ByteArrayOutputStream();
+        PrintStream originalErr = System.err;
+        System.setErr(new PrintStream(errContent));
+        try {
+            new LeagueStore().load();
+        } finally {
+            System.setErr(originalErr);
+        }
+
+        assertFalse(errContent.toString().contains("Field availability windows"));
+    }
+
+    @Test
+    @DisplayName("load() does not print the migration warning on a subsequent load of an already-v4 file")
+    void load_doesNotPrintWarningOnSubsequentLoadOfV4File() throws IOException {
+        String v3Json = """
+            {
+              "version": 3,
+              "divisions": [],
+              "fields": []
+            }
+            """;
+        Files.createDirectories(DATA_DIR);
+        Files.writeString(LEAGUE_FILE, v3Json);
+
+        // First load upgrades to v4 and prints the warning.
+        store.load();
+
+        // Second load: file is already v4 — no warning should appear.
+        ByteArrayOutputStream errContent = new ByteArrayOutputStream();
+        PrintStream originalErr = System.err;
+        System.setErr(new PrintStream(errContent));
+        try {
+            new LeagueStore().load();
+        } finally {
+            System.setErr(originalErr);
+        }
+
+        assertFalse(errContent.toString().contains("Field availability windows"));
     }
 
     // --- atomic write behaviour ---

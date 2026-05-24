@@ -267,6 +267,121 @@ Adjusts one game on a finalized schedule. Any combination of fields may be chang
 
 ---
 
+## Phase 1 algorithm: how team schedules are built
+
+`planr schedule generate` runs in two stages — a complete round-robin followed by fill rounds — to produce a matchup list where every team plays roughly the same number of home and away games.
+
+### Stage 1 — circle-method round-robin
+
+For each eligible division (≥ 2 teams), the scheduler generates one complete round-robin using the classic circle method:
+
+1. One team is fixed in position; the remaining `N−1` teams form a rotating list.
+2. If N is odd, a null bye-slot is appended so the team count is always even.
+3. There are `N−1` rounds. In each round, `N/2` pairs are read from the circle:
+   - Pair 0: fixed team vs. last position in the rotating list.
+   - Pairs 1…N/2−1: `rotating[i−1]` vs. `rotating[N−2−i]` (symmetric about the centre).
+   - Any pairing involving the bye-slot is discarded.
+4. After each round, the rotating list advances by moving its last element to the front.
+
+This produces exactly `N*(N-1)/2` games — one for every distinct team pair — with no team playing twice in the same round.
+
+**Home/away assignment in Stage 1:** each pair appears in a fixed column index (`specI`) that stays consistent across all rounds as the circle rotates. The left team is home when `(specI + r) % 2 == 0`, otherwise the right team is home. Because `specI` is constant per pair but `r` increments each round, home advantage alternates between the two teams on successive meetings. For a four-team division this produces exactly 1 home and 1 away game per team after two meetings.
+
+### Stage 2 — fill rounds
+
+After the round-robin, each team may have fewer games than the division's `targetGamesPerTeam`. Fill rounds run repeatedly until all teams reach the target or no more pairs can be formed:
+
+1. For each division, collect all teams still below target.
+2. Sort them: fewest games first; UUID as a stable tiebreaker to keep output deterministic.
+3. Pair greedily: teams at positions 0+1, 2+3, 4+5, … each form one game. The last team is skipped if an odd number remain below target in this round.
+4. **Home/away in fill rounds:** the team with the larger away-over-home imbalance (`awayCount − homeCount`) gets the home slot. Ties go to the team that sorted first (fewer games so far). This continuously re-balances home/away counts so no team accumulates a large advantage.
+5. Counters are updated and the process repeats. It terminates when every team is at target **or** when a full pass produces no new games (which happens with an odd team count — the last unpaired team can never get its final game from another team in the same position).
+
+### Game number assignment
+
+Game numbers are not assigned during generation. After all stage-1 and fill-round games are collected in order, a single pass assigns stable 1-based integers (`1, 2, 3, …`). This means game numbers are globally ordered: all of division A's round-robin games appear before division B's, and fill games appear after all round-robin games.
+
+### Example: 4 teams, target 6
+
+| Stage | Round | Games produced | Notes |
+|---|---|---|---|
+| Round-robin | 1 | A-B, C-D | 3 games per round, 3 rounds |
+| Round-robin | 2 | A-C, D-B | circle rotates once |
+| Round-robin | 3 | A-D, B-C | circle rotates again |
+| Fill | 1 | A-B, C-D | all 4 teams need 3 more; paired by deficit |
+| Fill | 2 | A-C, D-B | still 3 short each |
+| Fill | 3 | A-D, B-C | targets reached — done |
+
+After 6 fill games, every team has exactly 6 games, 3 home and 3 away.
+
+---
+
+## Phase 2 algorithm: how field assignment works
+
+`planr schedule assign` takes the confirmed matchup list from Phase 1 and finds a legal assignment of dates, times, and fields using [OR-Tools CP-SAT](https://developers.google.com/optimization/reference/python/sat/python/cp_model), Google's constraint-programming solver.
+
+### Step 1 — enumerate valid slots
+
+Before the solver runs, the scheduler enumerates every valid start time across the entire season:
+
+1. Walk every calendar date from `--start` to `--end`.
+2. For each date and field, determine the open window:
+   - Start with the league-wide `sunrise`→`sunset` window.
+   - If a field date override exists for that date, replace the window with the override's `openStart`→`openEnd`.
+   - Subtract any field blocks that fall on that date, which may fragment the window into multiple sub-ranges.
+3. Within each sub-range, advance a cursor in 15-minute increments. Each position where a game of the division's duration fits before the window closes becomes one **slot** `(date, field, startTime)`.
+
+Slots are enumerated separately for each division because divisions have different game durations (a 90-minute division gets more slots per day than a 120-minute one). The total slot count is printed in the feasibility check line before the solver starts.
+
+### Step 2 — build the constraint model
+
+The solver works on a matrix of **boolean decision variables**: one `BoolVar` per `(fixture, slot)` pair. Setting a variable to `true` means "assign this game to this slot." Three constraints restrict which assignments are legal:
+
+**C1 — each game assigned at most once**
+
+For each fixture, at most one of its slot variables may be `true`. This is expressed as a single `addAtMostOne` over all slot variables for that fixture. An auxiliary boolean `isAssigned[f]` equals the sum, recording whether the fixture received a slot at all.
+
+`addAtMostOne` (not `addExactlyOne`) is intentional: if there are fewer slots than games, the solver assigns as many as it can and saves a partial Draft rather than failing.
+
+**C2 — no two games overlap on the same field**
+
+Rather than checking every pair of games on the same field for time overlap (which grows as O(N²)), each variable is registered under every 15-minute tick it would occupy:
+
+```
+ticks covered = [slotStartMinute, slotStartMinute + gameDuration + 15-minute buffer)
+                in 15-minute steps
+```
+
+For each `(field, date, tick)` bucket, `addAtMostOne` ensures at most one game is active at that tick. This bounds the number of C2 constraints to `numFields × numDays × ticksPerDay` regardless of how many fixtures exist, and the 15-minute buffer guarantees turnover time between consecutive games on a field.
+
+**C3 — no team plays twice on the same calendar day**
+
+For each `(team, date)` pair, `addAtMostOne` is applied across all games where that team appears (home or away) on that date.
+
+### Step 3 — define the objective
+
+The solver optimises a two-level objective encoded as a single weighted sum:
+
+```
+maximise:  bigM × totalAssigned  −  maxWeekLoad
+where  bigM = totalFixtures + 1
+```
+
+- **Primary goal (totalAssigned):** assign as many games as possible. The `bigM` coefficient guarantees lexicographic dominance — gaining one more assigned game always outweighs any reduction in `maxWeekLoad`.
+- **Secondary goal (maxWeekLoad):** minimise the maximum number of games any team plays in a single ISO calendar week. `maxWeekLoad` is tracked by adding one constraint per `(team, ISO week)` pair: `sum(vars for that team-week) ≤ maxWeekLoad`. When the season has enough capacity for all games, the solver uses its remaining freedom to spread games evenly across the calendar.
+
+### Step 4 — solve and collect results
+
+The CP-SAT solver runs for up to 300 seconds. Progress is streamed to stdout at the 25%, 50%, and 75% time marks. The solver may finish early if it proves the solution is optimal.
+
+After the solver returns:
+
+- **OPTIMAL or FEASIBLE** — every variable where `booleanValue == true` becomes a `ScheduledGame`. Games are sorted by date, then start time, then field name. A Draft is saved regardless of whether all fixtures were assigned.
+- **UNKNOWN** — the solver timed out without finding any feasible solution (returned before placing a single game). This indicates the season window or field availability is too constrained. A failure message is returned and no Draft is saved.
+- **INFEASIBLE** — theoretically unreachable with `addAtMostOne` constraints; treated as an internal error.
+
+---
+
 ## Notes
 
 - Division and field names are matched case-insensitively in all commands

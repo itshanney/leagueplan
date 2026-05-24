@@ -4,6 +4,53 @@ All notable changes to `planr` are documented here. Each entry references the pr
 
 ---
 
+## [0.6.1] — Schedule Lifecycle, Viewing, Export & Backward Compatibility
+
+**PRD:** `features/2026-05-17-league-planner-core-scheduling-v2.md`  
+**Spec:** `specs/2026-05-24-schedule-lifecycle-view-export-migration.md`
+
+Closes out the v2 scheduling PRD with the remaining four sections: schedule lifecycle (finalize + game override/edit), schedule viewing (tabular `planr schedule view` with division/team filters), schedule export (`planr schedule export` JSON to stdout), and backward compatibility (v3→v4 schema migration that drops legacy field availability windows).
+
+### Added
+
+- **`planr schedule finalize`** — Promotes a Draft schedule to Finalized (irreversible). Prints a warning and requires the user to type `yes` at the prompt before writing. Exit code `1` if not in DRAFT state; exit code `1` if the user types anything other than `yes`.
+
+- **`planr schedule game override`** — Available in FINALIZED state only. Accepts any combination of `--date`, `--start`, `--field`, `--home`, `--away` to mutate a single game. Non-blocking conflict check warns to stderr when the new time/field overlaps another game (15-minute buffer) but saves regardless. No constraint re-validation is performed.
+
+- **`planr schedule game edit`** — Available in TEAM_SCHEDULE and DRAFT states. `--home <team>` or `--away <team>` swaps home/away for a given game ID. The `game edit` command is blocked in FINALIZED state (use `game override` instead).
+
+- **`planr schedule view`** — Renders a tabular schedule to stdout. Routes automatically: shows the matchup table if state is TEAM_SCHEDULE, shows the full field/time schedule if state is DRAFT or FINALIZED. Optional `--division` and `--team` filters (case-insensitive). The current round or date range is shown in the header. Games where the filtered team is home are marked with `*` in the position column.
+
+- **`planr schedule export`** — Serializes the schedule to a JSON array on stdout; game count annotation goes to stderr (redirectable with `>`). Routes automatically to team schedule format in TEAM_SCHEDULE state. Full schedule format includes `date`, `start_time`, `field_name`, `home_team`, `away_team`, `division_name`, and `status`. Team schedule format includes `game_number` (integer), `home_team`, `away_team`, and `division_name`; the `--team-schedule` flag forces this path in DRAFT/FINALIZED state. Export is blocked in FINALIZED state when `--team-schedule` is passed.
+
+- **`ScheduleState` enum** — `NONE`, `TEAM_SCHEDULE`, `DRAFT`, `FINALIZED`. Derived from `(league.teamSchedule(), league.schedule())` nullability via `ScheduleState.of(league)`; never persisted.
+
+- **`ScheduleStatus` enum** — `DRAFT`, `FINALIZED`. Persisted inside `Schedule.status`.
+
+### Changed
+
+- **Schema v3→v4 migration** — `LeagueStore.load()` now migrates v3 files: per-field `availabilityWindows` keys are dropped (silently ignored by Jackson), `Field.blocks` and `Field.dateOverrides` are initialized to empty lists, and `LeagueConfig.empty()` is added if absent. A one-time stderr warning ("Field availability windows…") is printed on the first load of a pre-v4 file; subsequent loads of the now-v4 file produce no warning. The migrated file is written back to disk immediately after migration.
+
+- **`planr schedule assign`** — Blocked in FINALIZED state (exit code `1`).
+
+### Tests
+
+- **`ScheduleCommandTest`** — 20 new tests across `GameEdit`, `Assign`, `Finalize`, `View`, `Export`, and `GameOverride` nested classes:
+  - `GameEdit`: fails when no team schedule exists, fails in FINALIZED state, fails when team not in game, no-op when team already home, swaps home/away in DRAFT, exits on corrupted data, succeeds in DRAFT state, DRAFT status preserved after edit
+  - `Assign`: fails when schedule is FINALIZED
+  - `Finalize`: prints irreversibility warning before the confirmation prompt
+  - `View`: shows FINALIZED status in header, shows TEAM_SCHEDULE status in header, renders matchup table with `--team-schedule` flag in FINALIZED state, division filter is case-insensitive, team filter is case-insensitive
+  - `Export`: auto-exports team schedule in TEAM_SCHEDULE state, team schedule JSON omits date/time/field, `game_number` is a numeric integer, stderr annotation mentions "team schedule"
+  - `GameOverride`: succeeds with out-of-season date (no constraint re-validation), multiple option overrides in one call succeed
+
+- **`LeagueStoreTest`** — 4 new migration and warning tests:
+  - `load_migratesV3ToV4ClearingFieldCollections`: v3 JSON with `availabilityWindows` → v4 with empty `blocks` and `dateOverrides`
+  - `load_printsMigrationWarningToStderrOnPreV4File`: stderr contains "Field availability windows" on first v3 load
+  - `load_noPrintWarningForNativeV4File`: natively-created v4 file produces no migration warning
+  - `load_doesNotPrintWarningOnSubsequentLoadOfV4File`: second load of an already-migrated v4 file produces no warning
+
+---
+
 ## [0.6.0] — Phase 2 Partial Schedules, Solver Progress & Constraint Summary
 
 **PRD:** `features/2026-05-17-league-planner-core-scheduling-v2.md`  
