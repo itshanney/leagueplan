@@ -1,6 +1,7 @@
 package org.leagueplan.planr.command;
 
 import org.leagueplan.planr.PlanrApp;
+import org.leagueplan.planr.model.DayOfWeekWindow;
 import org.leagueplan.planr.model.League;
 import org.leagueplan.planr.model.LeagueConfig;
 import picocli.CommandLine.Command;
@@ -10,10 +11,13 @@ import picocli.CommandLine.ParentCommand;
 import picocli.CommandLine.Spec;
 
 import java.io.IOException;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.Comparator;
+import java.util.List;
 import java.util.concurrent.Callable;
 
 @Command(
@@ -21,7 +25,9 @@ import java.util.concurrent.Callable;
     description = "Manage league-level configuration.",
     subcommands = {
         ConfigCommand.SetCmd.class,
-        ConfigCommand.ShowCmd.class
+        ConfigCommand.ShowCmd.class,
+        ConfigDowCommand.class,
+        ConfigBlockdayCommand.class
     },
     mixinStandardHelpOptions = true
 )
@@ -128,7 +134,9 @@ public class ConfigCommand implements Runnable {
                     (sunrise != null) ? sunrise : existing.sunriseTime(),
                     (sunset != null) ? sunset : existing.sunsetTime(),
                     (seasonStart != null) ? seasonStart : existing.seasonStart(),
-                    (seasonEnd != null) ? seasonEnd : existing.seasonEnd());
+                    (seasonEnd != null) ? seasonEnd : existing.seasonEnd(),
+                    existing.dowWindows(),
+                    existing.blockedDays());
 
                 parent.app.store.save(league.withConfig(updated));
                 System.out.println("League config updated.");
@@ -165,6 +173,32 @@ public class ConfigCommand implements Runnable {
                 System.out.printf("Season end:     %s%n",
                     (config == null || config.seasonEnd() == null)
                         ? "(not set)" : config.seasonEnd().toString());
+
+                System.out.println();
+                System.out.println("Day-of-week windows:");
+                List<DayOfWeekWindow> windows = (config != null) ? config.dowWindows() : List.of();
+                if (windows.isEmpty()) {
+                    System.out.println("  (none)");
+                } else {
+                    windows.stream()
+                        .sorted(Comparator.comparingInt(w -> w.day().getValue()))
+                        .forEach(w -> System.out.printf("  %s: %s – %s%n",
+                            DayParser.displayName(w.day()),
+                            w.openStart().format(TIME_FORMAT),
+                            w.openEnd().format(TIME_FORMAT)));
+                }
+
+                System.out.println();
+                System.out.println("Blocked days of week:");
+                List<DayOfWeek> blocked = (config != null) ? config.blockedDays() : List.of();
+                if (blocked.isEmpty()) {
+                    System.out.println("  (none)");
+                } else {
+                    blocked.stream()
+                        .sorted(Comparator.comparingInt(DayOfWeek::getValue))
+                        .forEach(d -> System.out.printf("  %s%n", DayParser.displayName(d)));
+                }
+
                 return 0;
             } catch (IOException e) {
                 System.err.printf("Error: Failed to access league data: %s%n", e.getMessage());

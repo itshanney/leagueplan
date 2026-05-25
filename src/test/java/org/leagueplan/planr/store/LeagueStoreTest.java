@@ -55,7 +55,7 @@ class LeagueStoreTest {
         League league = store.load();
         assertTrue(league.divisions().isEmpty());
         assertTrue(league.fields().isEmpty());
-        assertEquals(4, league.version());
+        assertEquals(5, league.version());
     }
 
     @Test
@@ -83,7 +83,7 @@ class LeagueStoreTest {
         League loaded = store.load();
         assertTrue(loaded.divisions().isEmpty());
         assertTrue(loaded.fields().isEmpty());
-        assertEquals(4, loaded.version());
+        assertEquals(5, loaded.version());
     }
 
     @Test
@@ -144,8 +144,8 @@ class LeagueStoreTest {
     // --- schema migrations ---
 
     @Test
-    @DisplayName("load() migrates a v2 file all the way to v4")
-    void load_migratesV2ToV4() throws IOException {
+    @DisplayName("load() migrates a v2 file all the way to v5")
+    void load_migratesV2ToV5() throws IOException {
         String v2Json = """
             {
               "version": 2,
@@ -157,15 +157,15 @@ class LeagueStoreTest {
         Files.writeString(LEAGUE_FILE, v2Json);
 
         League loaded = store.load();
-        assertEquals(4, loaded.version());
+        assertEquals(5, loaded.version());
         assertNull(loaded.schedule());
         assertTrue(loaded.divisions().isEmpty());
         assertTrue(loaded.fields().isEmpty());
     }
 
     @Test
-    @DisplayName("load() writes the migrated v4 file back to disk")
-    void load_writesMigratedV4FileToDisk() throws IOException {
+    @DisplayName("load() writes the migrated v5 file back to disk")
+    void load_writesMigratedV5FileToDisk() throws IOException {
         String v2Json = """
             {
               "version": 2,
@@ -179,12 +179,12 @@ class LeagueStoreTest {
         store.load();
 
         League onDisk = new LeagueStore().load();
-        assertEquals(4, onDisk.version());
+        assertEquals(5, onDisk.version());
     }
 
     @Test
-    @DisplayName("load() migrates a v1 file all the way to v4 in a single call")
-    void load_migratesV1ToV4InSingleLoad() throws IOException {
+    @DisplayName("load() migrates a v1 file all the way to v5 in a single call")
+    void load_migratesV1ToV5InSingleLoad() throws IOException {
         String v1Json = """
             {
               "version": 1,
@@ -195,14 +195,14 @@ class LeagueStoreTest {
         Files.writeString(LEAGUE_FILE, v1Json);
 
         League loaded = store.load();
-        assertEquals(4, loaded.version());
+        assertEquals(5, loaded.version());
         assertTrue(loaded.fields().isEmpty());
         assertNull(loaded.schedule());
     }
 
     @Test
-    @DisplayName("load() migrates a v3 file to v4 with empty blocks and dateOverrides on each field")
-    void load_migratesV3ToV4ClearingFieldCollections() throws IOException {
+    @DisplayName("load() migrates a v3 file to v5 with empty blocks and dateOverrides on each field")
+    void load_migratesV3ToV5ClearingFieldCollections() throws IOException {
         UUID fieldId = UUID.randomUUID();
         // v3 fields did not have blocks/dateOverrides; unknown keys are silently dropped by Jackson.
         String v3Json = """
@@ -223,7 +223,7 @@ class LeagueStoreTest {
         Files.writeString(LEAGUE_FILE, v3Json);
 
         League loaded = store.load();
-        assertEquals(4, loaded.version());
+        assertEquals(5, loaded.version());
         assertEquals(1, loaded.fields().size());
         Field field = loaded.fields().get(0);
         assertEquals(fieldId, field.id());
@@ -301,6 +301,55 @@ class LeagueStoreTest {
         }
 
         assertFalse(errContent.toString().contains("Field availability windows"));
+    }
+
+    // --- v4 → v5 migration ---
+
+    @Test
+    @DisplayName("load() migrates a v4 file (no dowWindows/blockedDays) to v5")
+    void load_migratesV4ToV5() throws IOException {
+        String v4Json = """
+            {
+              "version": 4,
+              "config": {
+                "sunriseTime": "09:00",
+                "sunsetTime": "18:00",
+                "seasonStart": "2026-06-01",
+                "seasonEnd": "2026-08-31"
+              },
+              "divisions": [],
+              "fields": []
+            }
+            """;
+        Files.createDirectories(DATA_DIR);
+        Files.writeString(LEAGUE_FILE, v4Json);
+
+        League loaded = store.load();
+        assertEquals(5, loaded.version());
+        assertNotNull(loaded.config());
+        assertTrue(loaded.config().dowWindows().isEmpty(),
+            "missing dowWindows key should deserialize as empty list");
+        assertTrue(loaded.config().blockedDays().isEmpty(),
+            "missing blockedDays key should deserialize as empty list");
+    }
+
+    @Test
+    @DisplayName("load() writes the migrated v5 file back to disk so a second load does not re-migrate")
+    void load_writesMigratedV5FileToDiskForV4File() throws IOException {
+        String v4Json = """
+            {
+              "version": 4,
+              "divisions": [],
+              "fields": []
+            }
+            """;
+        Files.createDirectories(DATA_DIR);
+        Files.writeString(LEAGUE_FILE, v4Json);
+
+        store.load();
+
+        League onDisk = new LeagueStore().load();
+        assertEquals(5, onDisk.version());
     }
 
     // --- atomic write behaviour ---

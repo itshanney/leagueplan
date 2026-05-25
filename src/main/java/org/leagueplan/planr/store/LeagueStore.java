@@ -84,6 +84,15 @@ public class LeagueStore {
             System.err.println("Warning: Field availability windows from a previous version "
                 + "have been removed. Please configure field blocks for the new season.");
         }
+        // v4→v5: adds dowWindows and blockedDays to LeagueConfig. LeagueConfig's compact constructor
+        // already normalizes the null fields from old JSON to empty lists; this block just stamps v5
+        // so the migration does not re-run. A v5 file loaded by a v4 binary will silently ignore
+        // the new fields (FAIL_ON_UNKNOWN_PROPERTIES is disabled), but they will be lost on next save.
+        if (league.version() < 5) {
+            league = new League(5, league.config(), league.divisions(), league.fields(),
+                league.teamSchedule(), league.schedule());
+            save(league);
+        }
         return league;
     }
 

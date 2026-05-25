@@ -4,6 +4,63 @@ All notable changes to `planr` are documented here. Each entry references the pr
 
 ---
 
+## [0.7.0] — League-Wide Day-of-Week Availability Windows & Blocked Days
+
+**PRD:** `features/2026-05-25-league-wide-availability-config.md`  
+**Spec:** `specs/2026-05-25-league-wide-availability-config.md`
+
+Adds two new league-wide availability controls that apply to all fields simultaneously: recurring day-of-week open windows (e.g., Wednesdays open at 16:00 instead of the global sunrise) and blocked days of the week (e.g., no availability on Sundays). Both are stored in `LeagueConfig` and are respected by the Phase 2 scheduler via a four-level precedence rule: `FieldDateOverride` → blocked day → day-of-week window → global sunrise/sunset. A `FieldDateOverride` can still rescue an individual date on an otherwise-blocked day. Schema advances from v4 to v5.
+
+### Added
+
+- **`planr config dow set --day <DAY> --start <HH:mm> --end <HH:mm>`** — Sets a recurring availability window for all fields on the specified day of the week. Replaces any existing window for that day. Accepts full day names or 3-letter abbreviations, case-insensitively. Rejects invalid day names, malformed times, and end ≤ start. Prints a conflict warning (with count) when field-level blocks or overrides exist on matching dates within the configured season; scans all entries when no season is set.
+
+- **`planr config dow clear --day <DAY>`** — Removes the day-of-week window for the specified day. Exits 1 if no window exists for that day.
+
+- **`planr config dow list`** — Lists all configured day-of-week windows in a `DAY / OPEN / CLOSE` table sorted Monday through Sunday. Shows an empty-state message when none are configured.
+
+- **`planr config blockday add --day <DAY>`** — Marks a day of the week as unavailable for all fields. Exits 1 if the day is already blocked. Prints a conflict warning when field-level entries exist on matching dates within the season; the warning explicitly notes that `FieldDateOverride` entries on specific dates still take precedence over the block.
+
+- **`planr config blockday remove --day <DAY>`** — Removes a day-of-week block. Exits 1 if the day is not currently blocked.
+
+- **`planr config blockday list`** — Lists all blocked days sorted Monday through Sunday. Shows an empty-state message when none are configured.
+
+- **`DayOfWeekWindow` record** — `(DayOfWeek day, LocalTime openStart, LocalTime openEnd)`. Stored in `LeagueConfig.dowWindows`.
+
+- **`DayParser` utility** — Package-private helper shared by `ConfigDowCommand` and `ConfigBlockdayCommand`. `parse(String)` accepts full day names and 3-letter abbreviations case-insensitively, returning `Optional<DayOfWeek>`. `displayName(DayOfWeek)` returns title-case names (e.g., "Wednesday"). `hint()` returns the accepted-format description used in error messages.
+
+### Changed
+
+- **`planr config show`** — Now renders two additional sections after the four existing fields: "Day-of-week windows:" (sorted Mon→Sun, "(none)" when empty) and "Blocked days of week:" (sorted Mon→Sun, "(none)" when empty).
+
+- **`LeagueConfig` record** — Gains two new fields: `List<DayOfWeekWindow> dowWindows` and `List<DayOfWeek> blockedDays`. The compact constructor normalizes both `null` to `List.of()`, ensuring safe deserialization of v4 files that omit these keys. New mutation helpers: `withDowWindowSet(DayOfWeekWindow)`, `withDowWindowRemoved(DayOfWeek)`, `withBlockedDayAdded(DayOfWeek)`, `withBlockedDayRemoved(DayOfWeek)`. `LeagueConfig.empty()` initializes both lists to `List.of()`.
+
+- **`SchedulerService`** — The `resolveOpenWindow(LeagueConfig, Field, LocalDate)` private helper now applies the four-level precedence rule. Both `enumerateAllSlots()` (used by the solver) and `estimateAvailableSlots()` (used by pre-Phase-2 feasibility warnings) delegate to this helper. A blocked day with no field-level override yields `null` (no slots for that date); a day-of-week window replaces global sunrise/sunset when no override or block applies.
+
+- **`planr config set`** — Preserves `dowWindows` and `blockedDays` when merging config values; previously-stored windows and blocks are not cleared by a `config set` call.
+
+- **Schema v4→v5 migration** — `LeagueStore.load()` now migrates v4 files: version is stamped to 5 and the file is written back to disk. No structural data transformation is required because the compact constructor normalizes the missing keys to empty lists during deserialization. A version bump prevents re-running the migration on subsequent loads.
+
+- **`League.CURRENT_VERSION`** — Advanced from `4` to `5`.
+
+### Tests
+
+- **`LeagueConfigTest`** — 12 tests: compact constructor null normalization for `dowWindows` and `blockedDays`; all four mutation helpers (`withDowWindowSet` add/replace/preserve-others/immutability, `withDowWindowRemoved` remove/no-op/preserve-others, `withBlockedDayAdded` add/append/immutability, `withBlockedDayRemoved` remove/no-op/preserve-others).
+
+- **`DayParserTest`** — 22 tests: full names for all 7 days, abbreviations for all 7 days, case insensitivity (uppercase, title-case, mixed), whitespace trimming, invalid inputs (null, empty, garbage, partial, numeric), `hint()` content, `displayName()` title-case for all 7 days.
+
+- **`ConfigDowCommandTest`** — 17 tests across `set`, `clear`, and `list` nested classes: success with full/abbreviated name, replace existing window, unrecognized day, invalid start/end time, end ≤ start, singular/plural conflict warning, no warning when no conflicts, season-scoped warning, all-entries warning when no season, I/O error (exit 2); clear success/not-found/persistence; list empty state/headers/sort order/times shown.
+
+- **`ConfigBlockdayCommandTest`** — 17 tests across `add`, `remove`, and `list` nested classes: success with full/abbreviated name, duplicate rejection, unrecognized day, persistence, singular conflict warning, precedence note in warning, no-warning case, I/O error; remove success/persistence/not-blocked/unrecognized day/preserves others; list empty state/heading/sort order.
+
+- **`ConfigShowDowBlockdayTest`** — 11 tests: DOW heading always present, `(none)` when empty, configured windows shown with times, sorted Mon→Sun; blocked-days heading, `(none)`, day names, sorted; both sections together when empty, both populated, coexistence with existing four config fields.
+
+- **`SchedulerServiceDowTest`** — 10 tests using `estimateAvailableSlots()` (no CP-SAT invocation): blocked day → 0 slots, blocked day in multi-day season reduces count by exactly one day, all 7 days blocked → 0; `FieldDateOverride` rescues slots on a blocked day and uses the override window (not global sunrise/sunset); DOW window narrows slot count to configured hours, other-day window doesn't affect the tested day, window applied consistently across all matching days; full precedence chain (override beats DOW window, DOW window beats global).
+
+- **`LeagueStoreTest`** — 2 new migration tests: v4 file with no `dowWindows`/`blockedDays` keys migrates to v5 with empty lists; migrated file is written back so a second load reads v5 without re-migrating.
+
+---
+
 ## [0.6.1] — Schedule Lifecycle, Viewing, Export & Backward Compatibility
 
 **PRD:** `features/2026-05-17-league-planner-core-scheduling-v2.md`  

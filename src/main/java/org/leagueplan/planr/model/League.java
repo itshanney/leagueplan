@@ -14,7 +14,7 @@ public record League(
     Schedule schedule
 ) {
 
-    private static final int CURRENT_VERSION = 4;
+    private static final int CURRENT_VERSION = 5;
 
     public League {
         divisions = (divisions == null) ? List.of() : divisions;

@@ -10,6 +10,7 @@ import com.google.ortools.sat.IntVar;
 import com.google.ortools.sat.LinearExpr;
 import com.google.ortools.sat.Literal;
 import org.leagueplan.planr.model.Division;
+import org.leagueplan.planr.model.DayOfWeekWindow;
 import org.leagueplan.planr.model.Field;
 import org.leagueplan.planr.model.FieldBlock;
 import org.leagueplan.planr.model.FieldDateOverride;
@@ -19,6 +20,7 @@ import org.leagueplan.planr.model.ScheduledGame;
 import org.leagueplan.planr.model.TeamGame;
 import org.leagueplan.planr.model.TeamSchedule;
 
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.temporal.WeekFields;
@@ -105,22 +107,15 @@ public class SchedulerService {
              date = date.plusDays(1)) {
 
             for (Field field : league.fields()) {
-                LocalTime openStart = config.sunriseTime();
-                LocalTime openEnd = config.sunsetTime();
-                for (FieldDateOverride override : field.dateOverrides()) {
-                    if (override.date().equals(date)) {
-                        openStart = override.openStart();
-                        openEnd = override.openEnd();
-                        break;
-                    }
-                }
+                LocalTime[] openWindow = resolveOpenWindow(config, field, date);
+                if (openWindow == null) continue;
 
                 final LocalDate currentDate = date;
                 List<FieldBlock> dateBlocks = field.blocks().stream()
                     .filter(b -> b.date().equals(currentDate))
                     .toList();
 
-                for (LocalTime[] window : subtractBlocks(openStart, openEnd, dateBlocks)) {
+                for (LocalTime[] window : subtractBlocks(openWindow[0], openWindow[1], dateBlocks)) {
                     LocalTime slotStart = window[0];
                     while (!slotStart.plusMinutes(gameDurationMinutes).isAfter(window[1])) {
                         total++;
@@ -151,21 +146,14 @@ public class SchedulerService {
         for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(1)) {
             final LocalDate currentDate = date;
             for (Field field : league.fields()) {
-                LocalTime openStart = config.sunriseTime();
-                LocalTime openEnd = config.sunsetTime();
-                for (FieldDateOverride override : field.dateOverrides()) {
-                    if (override.date().equals(currentDate)) {
-                        openStart = override.openStart();
-                        openEnd = override.openEnd();
-                        break;
-                    }
-                }
+                LocalTime[] openWindow = resolveOpenWindow(config, field, currentDate);
+                if (openWindow == null) continue;
 
                 List<FieldBlock> dateBlocks = field.blocks().stream()
                     .filter(b -> b.date().equals(currentDate))
                     .toList();
 
-                List<LocalTime[]> available = subtractBlocks(openStart, openEnd, dateBlocks);
+                List<LocalTime[]> available = subtractBlocks(openWindow[0], openWindow[1], dateBlocks);
 
                 for (UUID divId : slotsByDiv.keySet()) {
                     int duration = divisionDuration(league, divId);
@@ -181,6 +169,37 @@ public class SchedulerService {
             }
         }
         return slotsByDiv;
+    }
+
+    /**
+     * Resolves the open time window for a specific field and date using the four-level precedence
+     * rule: FieldDateOverride → blocked day → day-of-week window → global sunrise/sunset.
+     * Returns null when the date is a blocked day with no field-level override (no slots possible).
+     */
+    private LocalTime[] resolveOpenWindow(LeagueConfig config, Field field, LocalDate date) {
+        DayOfWeek dow = date.getDayOfWeek();
+
+        // Priority 1: field-specific date override wins over everything, including blocked days.
+        for (FieldDateOverride override : field.dateOverrides()) {
+            if (override.date().equals(date)) {
+                return new LocalTime[]{override.openStart(), override.openEnd()};
+            }
+        }
+
+        // Priority 2: league-wide blocked day (no override present).
+        if (config.blockedDays().contains(dow)) {
+            return null;
+        }
+
+        // Priority 3: day-of-week window replaces global sunrise/sunset for this day.
+        for (DayOfWeekWindow w : config.dowWindows()) {
+            if (w.day() == dow) {
+                return new LocalTime[]{w.openStart(), w.openEnd()};
+            }
+        }
+
+        // Priority 4: global sunrise/sunset.
+        return new LocalTime[]{config.sunriseTime(), config.sunsetTime()};
     }
 
     private Map<UUID, Integer> computeSlotCounts(Map<UUID, List<Slot>> slotsByDiv) {

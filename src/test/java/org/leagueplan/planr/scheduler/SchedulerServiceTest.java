@@ -38,11 +38,11 @@ class SchedulerServiceTest {
 
     // Normal config: fields open 09:00–18:00 over the full season.
     private static final LeagueConfig CONFIG = new LeagueConfig(
-        LocalTime.of(9, 0), LocalTime.of(18, 0), SEASON_START, SEASON_END);
+        LocalTime.of(9, 0), LocalTime.of(18, 0), SEASON_START, SEASON_END, List.of(), List.of());
     // Narrow config: fields open 09:00–10:00 → exactly 1 slot/day for 60-min games.
     // Season dates are set to SEASON_START/SEASON_END; generateShort() swaps in SHORT_SEASON_END.
     private static final LeagueConfig NARROW_CONFIG = new LeagueConfig(
-        LocalTime.of(9, 0), LocalTime.of(10, 0), SEASON_START, SEASON_END);
+        LocalTime.of(9, 0), LocalTime.of(10, 0), SEASON_START, SEASON_END, List.of(), List.of());
 
     // ---------------------------------------------------------------------------
     // League builder helpers
@@ -109,8 +109,9 @@ class SchedulerServiceTest {
     /** Uses the short (7-day) season — triggers pre-solve infeasibility for 4+ teams with narrow config. */
     private ScheduleResult generateShort(League l) {
         LeagueConfig shortConfig = new LeagueConfig(
-            l.config().sunriseTime(), l.config().sunsetTime(), SEASON_START, SHORT_SEASON_END);
-        League shortLeague = new League(4, shortConfig, l.divisions(), l.fields(), l.teamSchedule(), null);
+            l.config().sunriseTime(), l.config().sunsetTime(), SEASON_START, SHORT_SEASON_END,
+            List.of(), List.of());
+        League shortLeague = new League(5, shortConfig, l.divisions(), l.fields(), l.teamSchedule(), null);
         return new SchedulerService().assign(shortLeague);
     }
 
@@ -451,7 +452,7 @@ class SchedulerServiceTest {
     void partialSuccessWhenSingleSlotAvailableForMultipleFixtures() {
         // 1-day season × 09:00-10:00 window = 1 slot; 4-team div = 12 fixtures → 1 game assigned
         LeagueConfig oneDayConfig = new LeagueConfig(
-            LocalTime.of(9, 0), LocalTime.of(10, 0), SEASON_START, SEASON_START);
+            LocalTime.of(9, 0), LocalTime.of(10, 0), SEASON_START, SEASON_START, List.of(), List.of());
         Team t1 = team("A"), t2 = team("B"), t3 = team("C"), t4 = team("D");
         Division div = division("Majors", 60, t1, t2, t3, t4);
         Field f = field("Riverside Park");

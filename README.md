@@ -34,6 +34,10 @@ planr team add "Majors" "Yankees"
 # 3. Add a field
 planr field add "Riverside Park" --address "100 River Rd"
 
+# (optional) restrict availability by day of the week for all fields
+planr config dow set --day wednesday --start 16:00 --end 21:00
+planr config blockday add --day sunday
+
 # 4. Phase 1 — generate the team schedule (matchups only, no dates yet)
 planr schedule generate
 
@@ -56,7 +60,7 @@ planr schedule export
 
 ### League configuration
 
-League configuration sets parameters used by schedule generation. All four values are required before Phase 2 (`planr schedule assign`) can run.
+League configuration sets parameters used by schedule generation. Sunrise, sunset, and season dates are required before Phase 2 (`planr schedule assign`) can run.
 
 ```
 planr config set [--sunrise <HH:mm>] [--sunset <HH:mm>] [--start <YYYY-MM-DD>] [--end <YYYY-MM-DD>]
@@ -67,6 +71,8 @@ planr config show
 - `--start` and `--end` define the season date range
 - Each option is independent; `config set` merges with existing values rather than replacing them
 
+`config show` also displays any configured day-of-week windows and blocked days (see below).
+
 **Example**
 
 ```
@@ -74,10 +80,73 @@ $ planr config set --sunrise 09:00 --sunset 18:00 --start 2026-06-01 --end 2026-
 League config updated.
 
 $ planr config show
-Sunrise:      09:00
-Sunset:       18:00
-Season start: 2026-06-01
-Season end:   2026-08-31
+League Configuration
+--------------------
+Sunrise:        09:00
+Sunset:         18:00
+Season start:   2026-06-01
+Season end:     2026-08-31
+
+Day-of-week windows:
+  Wednesday: 16:00 – 21:00
+
+Blocked days of week:
+  Sunday
+```
+
+---
+
+### Day-of-week windows
+
+Day-of-week windows narrow the effective open window for **all fields** on a specific day of the week. For example, if fields generally open at 09:00 but Wednesday evenings start at 16:00, set a Wednesday window instead of adding identical blocks to every field. A day-of-week window takes precedence over the global sunrise/sunset but is overridden by any field-level `FieldDateOverride` on a specific date.
+
+```
+planr config dow set   --day <DAY> --start <HH:mm> --end <HH:mm>
+planr config dow clear --day <DAY>
+planr config dow list
+```
+
+- `<DAY>` accepts full names (`wednesday`) or 3-letter abbreviations (`wed`), case-insensitively
+- Setting a window for a day that already has one replaces it
+- If field-level blocks or overrides already exist on matching dates within the season, a warning is printed with the count
+
+**Example**
+
+```
+$ planr config dow set --day wednesday --start 16:00 --end 21:00
+Day-of-week window set: Wednesday 16:00–21:00.
+
+$ planr config dow list
+DAY          OPEN   CLOSE
+-----------  -----  -----
+Wednesday    16:00  21:00
+```
+
+---
+
+### Blocked days of the week
+
+Blocked days mark a day of the week as unavailable for **all fields** throughout the season (e.g., no games on Sundays). A blocked day removes all slots on matching dates. A `FieldDateOverride` on a specific field and date still takes precedence, allowing individual rescued dates (e.g., a rescheduled game on an otherwise-blocked Sunday).
+
+```
+planr config blockday add    --day <DAY>
+planr config blockday remove --day <DAY>
+planr config blockday list
+```
+
+- `<DAY>` accepts full names or 3-letter abbreviations, case-insensitively
+- Adding a day that is already blocked exits with an error
+- When existing field-level entries fall on matching dates within the season, a warning is printed noting that `FieldDateOverride` entries still take precedence
+
+**Example**
+
+```
+$ planr config blockday add --day sunday
+Sunday added to blocked days.
+
+$ planr config blockday list
+Blocked days of week:
+  Sunday
 ```
 
 ---
@@ -325,11 +394,13 @@ After 6 fill games, every team has exactly 6 games, 3 home and 3 away.
 Before the solver runs, the scheduler enumerates every valid start time across the entire season:
 
 1. Walk every calendar date from `--start` to `--end`.
-2. For each date and field, determine the open window:
-   - Start with the league-wide `sunrise`→`sunset` window.
-   - If a field date override exists for that date, replace the window with the override's `openStart`→`openEnd`.
-   - Subtract any field blocks that fall on that date, which may fragment the window into multiple sub-ranges.
-3. Within each sub-range, advance a cursor in 15-minute increments. Each position where a game of the division's duration fits before the window closes becomes one **slot** `(date, field, startTime)`.
+2. For each date and field, determine the open window using a four-level precedence rule:
+   1. **`FieldDateOverride`** — if a date-specific override exists for this field, use its `openStart`→`openEnd`. This wins over everything, including blocked days, allowing individual rescued dates on an otherwise-blocked day.
+   2. **Blocked day** — if the day of week is in the league's blocked-days list and no override applies, the date produces no slots.
+   3. **Day-of-week window** — if a league-wide day-of-week window is configured for this day (e.g., Wednesdays open at 16:00), use its `openStart`→`openEnd` in place of the global sunrise/sunset.
+   4. **Global sunrise/sunset** — fall back to the league-wide `sunrise`→`sunset` window.
+3. Subtract any field-level blocks (`planr field block`) that fall on that date. This may fragment the open window into multiple sub-ranges.
+4. Within each sub-range, advance a cursor in 15-minute increments. Each position where a game of the division's duration fits before the window closes becomes one **slot** `(date, field, startTime)`.
 
 Slots are enumerated separately for each division because divisions have different game durations (a 90-minute division gets more slots per day than a 120-minute one). The total slot count is printed in the feasibility check line before the solver starts.
 
