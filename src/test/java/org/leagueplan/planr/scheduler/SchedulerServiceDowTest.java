@@ -63,13 +63,13 @@ class SchedulerServiceDowTest {
     private static Division division(String name) {
         Team t1 = new Team(UUID.randomUUID(), "Blue Jays");
         Team t2 = new Team(UUID.randomUUID(), "Cardinals");
-        return new Division(UUID.randomUUID(), name, GAME_DURATION, 2, List.of(t1, t2));
+        return new Division(UUID.randomUUID(), name, GAME_DURATION, 2, List.of(t1, t2), null, null, null, null);
     }
 
     /** Build a league with no team schedule (sufficient for slot estimation). */
     private static League leagueFor(LeagueConfig config, Field field) {
         Division div = division("Majors");
-        return new League(5, config, List.of(div), List.of(field), null, null, List.of());
+        return new League(5, config, List.of(div), List.of(field), null, null, List.of(), List.of());
     }
 
     /**

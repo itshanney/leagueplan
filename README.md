@@ -38,20 +38,34 @@ planr field add "Riverside Park" --address "100 River Rd"
 planr config dow set --day wednesday --start 16:00 --end 21:00
 planr config blockday add --day sunday
 
-# 4. Phase 1 — generate the team schedule (matchups only, no dates yet)
+# 4. (optional) configure and assign pre-season practices
+planr division edit "Majors" --practice-count 2 --practice-duration-minutes 60 \
+  --practice-start 2026-05-15 --practice-end 2026-05-30
+planr practice generate
+echo yes | planr practice assign
+planr practice status --division Majors
+
+# 5. Phase 1 — generate the team schedule (matchups only, no dates yet)
 planr schedule generate
 
-# 5. Review and optionally adjust home/away assignments
+# 6. Review and optionally adjust home/away assignments
 planr schedule view
 planr schedule game edit 3 --home Cardinals
 
-# 6. Phase 2 — assign dates, times, and fields
+# 7. Phase 2 — assign dates, times, and fields
 echo yes | planr schedule assign
 
-# 7. Review, finalize, and export
+# 8. Review, finalize, and export
 planr schedule view
 planr schedule finalize
 planr schedule export
+
+# 9. (optional) run playoffs after the regular season
+planr playoff generate --division Majors --start 2026-09-06 --end 2026-09-20 \
+  --seeds Yankees --seeds "Red Sox" --seeds Cardinals --seeds "Blue Jays"
+planr playoff status --division Majors
+echo yes | planr playoff assign
+planr playoff status --division Majors
 ```
 
 ---
@@ -271,6 +285,78 @@ At most one override per field per date. Blocks are applied on top of the overri
 
 ---
 
+### Practices
+
+Pre-season practice scheduling uses the same two-phase pattern as regular-season scheduling. Configure a practice window and per-team count on each division, then generate and assign.
+
+#### Configure practice settings
+
+```
+planr division edit <division> [--practice-count <n>] [--practice-duration-minutes <n>]
+                               [--practice-start <YYYY-MM-DD>] [--practice-end <YYYY-MM-DD>]
+```
+
+All four flags are optional and independent; omitting one leaves its current value unchanged. Validation rules:
+
+- `--practice-count` and `--practice-duration-minutes` must be ≥ 1
+- `--practice-end` must not be before `--practice-start`
+- Both dates must be strictly before `config.seasonStart` (when the season is configured)
+
+The practice window appears in `planr division list` as `PRAC. START`, `PRAC. END`, `PRACTICE COUNT`, and `PRAC. DURATION`. Fields not yet set display as `--`.
+
+#### Phase 1 — generate practice slots
+
+```
+planr practice generate
+```
+
+Generates one practice slot stub per team per `practiceCount` for every division that has all four practice fields configured. Divisions missing any field, or that already have a practice schedule, are skipped with a warning. Exits 1 if no division qualifies.
+
+**Preconditions:** at least one division with full practice configuration and at least one team.
+
+#### Phase 2 — assign field slots to practices
+
+```
+planr practice assign
+```
+
+Clears any prior assignments and runs the CP-SAT solver across all divisions with a practice schedule. Each division's `[practiceStart, practiceEnd]` window and `practiceDurationMinutes` are used independently. Because the practice window ends before `seasonStart`, practice and game weeks never overlap. `maxGamesPerWeek` and `minRestDays` apply within the practice window only.
+
+**Preconditions:** at least one practice schedule exists; at least one field configured; sunrise/sunset configured.
+
+#### View and manage
+
+```
+planr practice status [--division <name>]
+planr practice clear --division <name>
+```
+
+- **`status`** — without `--division`: one-line summary per division showing state (`NOT_CONFIGURED`, `NOT_STARTED`, `GENERATED`, `ASSIGNED`) with assigned/total slot counts. With `--division`: per-slot table showing team name, slot number (1 of N, 2 of N, …), date, time, and field (`UNASSIGNED` when not yet assigned).
+- **`clear`** — removes a division's practice schedule after interactive confirmation, returning it to `NOT_STARTED`. Does not affect other divisions.
+
+**Example**
+
+```
+$ planr division edit "Majors" --practice-count 2 --practice-duration-minutes 60 \
+    --practice-start 2026-05-15 --practice-end 2026-05-30
+Division "Majors" updated.
+
+$ planr practice generate
+Generated 8 practice slots for Majors (4 teams × 2 practices).
+Practice generation complete: 1 division(s) processed, 8 total slots created.
+
+$ planr practice status --division Majors
+Division: Majors | State: GENERATED | Period: 2026-05-15 to 2026-05-30
+
+TEAM        PRACTICE  DATE        TIME   FIELD
+----------  --------  ----------  -----  -----
+Blue Jays   1 of 2    UNASSIGNED  --     --
+Blue Jays   2 of 2    UNASSIGNED  --     --
+...
+```
+
+---
+
 ### Schedule
 
 Schedule generation is split into two phases, with a review step in between.
@@ -333,6 +419,73 @@ planr schedule game override <number> [--date <date>] [--start <HH:mm>] [--field
 ```
 
 Adjusts one game on a finalized schedule. Any combination of fields may be changed. A non-blocking warning is printed to stderr if the change creates a field conflict. Overridden games are marked with `*` in `planr schedule view`.
+
+---
+
+### Playoffs
+
+Playoff brackets use the same two-phase pattern as the regular-season schedule. Phase 1 generates a double-elimination bracket for a division; Phase 2 runs the CP-SAT field-assignment solver across all brackets simultaneously.
+
+#### Phase 1 — generate a bracket
+
+```
+planr playoff generate --division <name> --start <YYYY-MM-DD> --end <YYYY-MM-DD>
+                       --seeds <team> [--seeds <team> ...]
+```
+
+Generates a double-elimination bracket for the specified division. `--seeds` is a repeatable flag — supply it once per team in seed order (seed 1 first). Bracket structure: the N teams are padded to the next power of two P; top-seeded teams receive byes in Winners R1. Subsequent rounds use positional references (`W of G3`, `L of G2`). The final two slots are the Championship and an optional conditional re-match.
+
+Validation: division must exist; end not before start; seed count must match the division's team count (2–16); all seed names must match division teams (case-insensitive); no duplicate seeds; no existing playoff for the division.
+
+**Preconditions:** division exists with 2–16 teams; no existing playoff for the division.
+
+#### Phase 2 — assign field slots to playoff games
+
+```
+planr playoff assign
+```
+
+Clears any prior assignments and runs the CP-SAT solver across all divisions that have a playoff bracket. All brackets must share the same `startDate` and `endDate` (validated before the solve starts). Bye slots and the conditional re-match slot are never submitted to the solver. Later-round games use deterministic pseudo-team IDs so rest-day and weekly-cap constraints fire per slot without affecting solver correctness.
+
+**Preconditions:** at least one playoff bracket exists; all brackets share the same date range; at least one field configured; sunrise/sunset configured.
+
+#### View, clear
+
+```
+planr playoff status [--division <name>]
+planr playoff clear --division <name>
+```
+
+- **`status`** — without `--division`: one-line summary per division showing state (`NOT_STARTED` | `GENERATED` | `ASSIGNED`). With `--division`: full bracket table (`SLOT`, `ROUND`, `POSITION A`, `POSITION B`, `ASSIGNED`). Bye slots show `BYE`; unassigned real games show `UNASSIGNED`. The conditional re-match slot is marked `*`.
+- **`clear`** — removes a division's bracket after interactive confirmation, returning it to `NOT_STARTED`. Does not affect other divisions.
+
+**Example**
+
+```
+$ planr playoff generate --division Majors --start 2026-09-06 --end 2026-09-20 \
+    --seeds Yankees --seeds "Red Sox" --seeds Cardinals --seeds "Blue Jays"
+
+SLOT  ROUND       POSITION A  POSITION B  BYE
+----  ----------  ----------  ----------  ---
+G1    Winners R1  Yankees     Blue Jays
+G2    Winners R1  Red Sox     Cardinals
+...
+G8 *  Championship  W of L-Final  W of Champ
+
+Playoff generated for Majors: 4 teams, 7 game slots, 0 bye(s).
+
+$ planr playoff status --division Majors
+Division: Majors | State: GENERATED | Period: 2026-09-06 to 2026-09-20
+
+SLOT    ROUND         POSITION A   POSITION B   ASSIGNED
+------  ------------  -----------  -----------  ----------
+G1      Winners R1    Yankees      Blue Jays    UNASSIGNED
+G2      Winners R1    Red Sox      Cardinals    UNASSIGNED
+...
+G8 *    Championship  W of G6      W of G7      UNASSIGNED
+
+* = conditional (championship re-match slot)
+```
 
 ---
 

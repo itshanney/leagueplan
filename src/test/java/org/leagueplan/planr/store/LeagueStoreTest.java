@@ -55,7 +55,7 @@ class LeagueStoreTest {
         League league = store.load();
         assertTrue(league.divisions().isEmpty());
         assertTrue(league.fields().isEmpty());
-        assertEquals(7, league.version());
+        assertEquals(8, league.version());
     }
 
     @Test
@@ -83,14 +83,14 @@ class LeagueStoreTest {
         League loaded = store.load();
         assertTrue(loaded.divisions().isEmpty());
         assertTrue(loaded.fields().isEmpty());
-        assertEquals(7, loaded.version());
+        assertEquals(8, loaded.version());
     }
 
     @Test
     @DisplayName("save() and load() round-trips all division fields including UUID")
     void saveAndLoad_roundTripsDivisionFields() throws IOException {
         UUID divId = UUID.randomUUID();
-        store.save(new League(4, null, List.of(new Division(divId, "Majors", 120, 0, List.of())), List.of(), null, null, List.of()));
+        store.save(new League(4, null, List.of(new Division(divId, "Majors", 120, 0, List.of(), null, null, null, null)), List.of(), null, null, List.of(), List.of()));
 
         League loaded = store.load();
         assertEquals(1, loaded.divisions().size());
@@ -105,8 +105,8 @@ class LeagueStoreTest {
     void saveAndLoad_roundTripsTeams() throws IOException {
         UUID teamId = UUID.randomUUID();
         Team team = new Team(teamId, "Blue Jays");
-        Division division = new Division(UUID.randomUUID(), "Majors", 120, 0, List.of(team));
-        store.save(new League(4, null, List.of(division), List.of(), null, null, List.of()));
+        Division division = new Division(UUID.randomUUID(), "Majors", 120, 0, List.of(team), null, null, null, null);
+        store.save(new League(4, null, List.of(division), List.of(), null, null, List.of(), List.of()));
 
         List<Team> loadedTeams = store.load().divisions().get(0).teams();
         assertEquals(1, loadedTeams.size());
@@ -118,12 +118,12 @@ class LeagueStoreTest {
     @DisplayName("save() and load() preserves insertion order of multiple divisions")
     void saveAndLoad_preservesDivisionOrder() throws IOException {
         List<Division> divisions = List.of(
-            new Division(UUID.randomUUID(), "Majors", 120, 0, List.of()),
-            new Division(UUID.randomUUID(), "AAA",    90,  0, List.of()),
-            new Division(UUID.randomUUID(), "Coast",  90,  0, List.of()),
-            new Division(UUID.randomUUID(), "T-Ball", 60,  0, List.of())
+            new Division(UUID.randomUUID(), "Majors", 120, 0, List.of(), null, null, null, null),
+            new Division(UUID.randomUUID(), "AAA",    90,  0, List.of(), null, null, null, null),
+            new Division(UUID.randomUUID(), "Coast",  90,  0, List.of(), null, null, null, null),
+            new Division(UUID.randomUUID(), "T-Ball", 60,  0, List.of(), null, null, null, null)
         );
-        store.save(new League(4, null, divisions, List.of(), null, null, List.of()));
+        store.save(new League(4, null, divisions, List.of(), null, null, List.of(), List.of()));
 
         List<Division> loaded = store.load().divisions();
         assertEquals(4, loaded.size());
@@ -136,8 +136,8 @@ class LeagueStoreTest {
     @Test
     @DisplayName("save() and load() round-trips a division name containing special characters")
     void saveAndLoad_roundTripsSpecialCharactersInName() throws IOException {
-        Division division = new Division(UUID.randomUUID(), "T-Ball & Rookie", 60, 0, List.of());
-        store.save(new League(4, null, List.of(division), List.of(), null, null, List.of()));
+        Division division = new Division(UUID.randomUUID(), "T-Ball & Rookie", 60, 0, List.of(), null, null, null, null);
+        store.save(new League(4, null, List.of(division), List.of(), null, null, List.of(), List.of()));
         assertEquals("T-Ball & Rookie", store.load().divisions().get(0).name());
     }
 
@@ -157,7 +157,7 @@ class LeagueStoreTest {
         Files.writeString(LEAGUE_FILE, v2Json);
 
         League loaded = store.load();
-        assertEquals(7, loaded.version());
+        assertEquals(8, loaded.version());
         assertNull(loaded.schedule());
         assertTrue(loaded.divisions().isEmpty());
         assertTrue(loaded.fields().isEmpty());
@@ -179,7 +179,7 @@ class LeagueStoreTest {
         store.load();
 
         League onDisk = new LeagueStore().load();
-        assertEquals(7, onDisk.version());
+        assertEquals(8, onDisk.version());
     }
 
     @Test
@@ -195,7 +195,7 @@ class LeagueStoreTest {
         Files.writeString(LEAGUE_FILE, v1Json);
 
         League loaded = store.load();
-        assertEquals(7, loaded.version());
+        assertEquals(8, loaded.version());
         assertTrue(loaded.fields().isEmpty());
         assertNull(loaded.schedule());
     }
@@ -223,7 +223,7 @@ class LeagueStoreTest {
         Files.writeString(LEAGUE_FILE, v3Json);
 
         League loaded = store.load();
-        assertEquals(7, loaded.version());
+        assertEquals(8, loaded.version());
         assertEquals(1, loaded.fields().size());
         Field field = loaded.fields().get(0);
         assertEquals(fieldId, field.id());
@@ -325,7 +325,7 @@ class LeagueStoreTest {
         Files.writeString(LEAGUE_FILE, v4Json);
 
         League loaded = store.load();
-        assertEquals(7, loaded.version());
+        assertEquals(8, loaded.version());
         assertNotNull(loaded.config());
         assertTrue(loaded.config().dowWindows().isEmpty(),
             "missing dowWindows key should deserialize as empty list");
@@ -349,7 +349,7 @@ class LeagueStoreTest {
         store.load();
 
         League onDisk = new LeagueStore().load();
-        assertEquals(7, onDisk.version());
+        assertEquals(8, onDisk.version());
     }
 
     // --- atomic write behaviour ---

@@ -31,11 +31,11 @@ class TeamScheduleServiceTest {
     }
 
     private static Division division(String name, int target, Team... teams) {
-        return new Division(UUID.randomUUID(), name, 60, target, List.of(teams));
+        return new Division(UUID.randomUUID(), name, 60, target, List.of(teams), null, null, null, null);
     }
 
     private static League league(LeagueConfig config, Division... divisions) {
-        return new League(4, config, List.of(divisions), List.of(), null, null, List.of());
+        return new League(4, config, List.of(divisions), List.of(), null, null, List.of(), List.of());
     }
 
     private static League league(Division... divisions) {

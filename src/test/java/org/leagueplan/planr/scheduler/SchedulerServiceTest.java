@@ -57,7 +57,7 @@ class SchedulerServiceTest {
     private static Division division(String name, int duration, Team... teams) {
         // sets target to 2*(N-1) so these integration tests produce N*(N-1) total games
         int target = 2 * Math.max(1, teams.length - 1);
-        return new Division(UUID.randomUUID(), name, duration, target, List.of(teams));
+        return new Division(UUID.randomUUID(), name, duration, target, List.of(teams), null, null, null, null);
     }
 
     private static Field field(String name) {
@@ -65,13 +65,13 @@ class SchedulerServiceTest {
     }
 
     private static League league(LeagueConfig config, List<Division> divisions, List<Field> fields) {
-        League base = new League(4, config, divisions, fields, null, null, List.of());
+        League base = new League(4, config, divisions, fields, null, null, List.of(), List.of());
         TeamScheduleResult tsResult = new TeamScheduleService().generate(base);
         if (tsResult instanceof TeamScheduleResult.Failure f) {
             throw new IllegalStateException("Test setup: " + f.message());
         }
         TeamSchedule ts = ((TeamScheduleResult.Success) tsResult).schedule();
-        return new League(4, config, divisions, fields, ts, null, List.of());
+        return new League(4, config, divisions, fields, ts, null, List.of(), List.of());
     }
 
     /** Build a minimal 2-team league. 2 games required. */
@@ -113,7 +113,7 @@ class SchedulerServiceTest {
         LeagueConfig shortConfig = new LeagueConfig(
             l.config().sunriseTime(), l.config().sunsetTime(), SEASON_START, SHORT_SEASON_END,
             List.of(), List.of(), null, null);
-        League shortLeague = new League(5, shortConfig, l.divisions(), l.fields(), l.teamSchedule(), null, List.of());
+        League shortLeague = new League(5, shortConfig, l.divisions(), l.fields(), l.teamSchedule(), null, List.of(), List.of());
         return new SchedulerService().assign(shortLeague);
     }
 
@@ -505,9 +505,9 @@ class SchedulerServiceTest {
         Team z1 = team("ZA"), z2 = team("ZB");
         Team a1 = team("AA"), a2 = team("AB");
         Team m1 = team("MA"), m2 = team("MB");
-        Division zebra  = new Division(UUID.randomUUID(), "Zebra",  60, 2, List.of(z1, z2));
-        Division alpha  = new Division(UUID.randomUUID(), "Alpha",  60, 2, List.of(a1, a2));
-        Division majors = new Division(UUID.randomUUID(), "Majors", 60, 2, List.of(m1, m2));
+        Division zebra  = new Division(UUID.randomUUID(), "Zebra",  60, 2, List.of(z1, z2), null, null, null, null);
+        Division alpha  = new Division(UUID.randomUUID(), "Alpha",  60, 2, List.of(a1, a2), null, null, null, null);
+        Division majors = new Division(UUID.randomUUID(), "Majors", 60, 2, List.of(m1, m2), null, null, null, null);
         Field f = field("Riverside Park");
         League l = league(CONFIG, List.of(zebra, alpha, majors), List.of(f));
 

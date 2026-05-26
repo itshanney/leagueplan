@@ -19,6 +19,8 @@ import org.leagueplan.planr.model.League;
 import org.leagueplan.planr.model.LeagueConfig;
 import org.leagueplan.planr.model.Playoff;
 import org.leagueplan.planr.model.PlayoffGame;
+import org.leagueplan.planr.model.PracticeSchedule;
+import org.leagueplan.planr.model.PracticeSlot;
 import org.leagueplan.planr.model.ScheduledGame;
 import org.leagueplan.planr.model.TeamGame;
 import org.leagueplan.planr.model.TeamSchedule;
@@ -807,6 +809,289 @@ public class SchedulerService {
             .toList();
 
         return PlayoffScheduleResult.success(assignmentsByGameId, status == CpSolverStatus.OPTIMAL, summaries);
+    }
+
+    // --- Practice field assignment ---
+
+    private record PracticeVar(BoolVar var, PracticeFixture fixture, Slot slot) {}
+
+    /**
+     * Assigns field/time slots to all practice slots across the provided PracticeSchedule list
+     * in a single CP-SAT solve. Each practice involves one team; there is no opponent.
+     */
+    public PracticeScheduleResult assignPractices(League league, List<PracticeSchedule> schedules) {
+        Loader.loadNativeLibraries();
+
+        long startMs = System.currentTimeMillis();
+
+        Map<UUID, List<PracticeFixture>> fixturesByDiv = new LinkedHashMap<>();
+        Map<UUID, LocalDate[]> divisionWindows = new HashMap<>();
+
+        for (PracticeSchedule ps : schedules) {
+            UUID divId = ps.divisionId();
+            int duration = divisionPracticeDuration(league, divId);
+            List<PracticeFixture> fixtures = new ArrayList<>();
+            for (PracticeSlot slot : ps.slots()) {
+                fixtures.add(new PracticeFixture(slot.slotId(), slot.teamId(), divId, duration));
+            }
+            if (!fixtures.isEmpty()) {
+                fixturesByDiv.put(divId, fixtures);
+            }
+            Division div = league.divisions().stream()
+                .filter(d -> d.id().equals(divId))
+                .findFirst()
+                .orElseThrow();
+            divisionWindows.put(divId, new LocalDate[]{div.practiceStart(), div.practiceEnd()});
+        }
+
+        if (fixturesByDiv.isEmpty()) {
+            return PracticeScheduleResult.failure(
+                "Error: No practice slots found. Run 'planr practice generate' first.");
+        }
+
+        Map<UUID, List<Slot>> slotsByDiv =
+            enumeratePracticeSlots(league, divisionWindows, fixturesByDiv.keySet());
+        Map<UUID, Integer> slotCounts = computeSlotCounts(slotsByDiv);
+
+        int totalFixtures = fixturesByDiv.values().stream().mapToInt(List::size).sum();
+        int elapsed0 = (int)((System.currentTimeMillis() - startMs) / 1000);
+        System.out.printf("[%d:%02d] Feasibility check: %d practice slots across %d division(s). Solver started.%n",
+            elapsed0 / 60, elapsed0 % 60, totalFixtures, fixturesByDiv.size());
+        System.out.flush();
+
+        return buildAndSolvePractices(league, fixturesByDiv, slotsByDiv, slotCounts, startMs);
+    }
+
+    private Map<UUID, List<Slot>> enumeratePracticeSlots(League league,
+            Map<UUID, LocalDate[]> divisionWindows, Set<UUID> divisionIds) {
+        Map<UUID, List<Slot>> slotsByDiv = new HashMap<>();
+        for (UUID divId : divisionIds) {
+            slotsByDiv.put(divId, new ArrayList<>());
+        }
+
+        LeagueConfig config = league.config();
+        if (config == null || config.sunriseTime() == null || config.sunsetTime() == null) {
+            return slotsByDiv;
+        }
+
+        // Iterate the union of all practice windows to avoid redundant field/date passes.
+        LocalDate globalStart = divisionWindows.values().stream()
+            .map(w -> w[0]).min(Comparator.naturalOrder()).orElse(null);
+        LocalDate globalEnd = divisionWindows.values().stream()
+            .map(w -> w[1]).max(Comparator.naturalOrder()).orElse(null);
+        if (globalStart == null || globalEnd == null) return slotsByDiv;
+
+        for (LocalDate date = globalStart; !date.isAfter(globalEnd); date = date.plusDays(1)) {
+            final LocalDate currentDate = date;
+            for (Field field : league.fields()) {
+                LocalTime[] openWindow = resolveOpenWindow(config, field, currentDate);
+                if (openWindow == null) continue;
+
+                List<FieldBlock> dateBlocks = field.blocks().stream()
+                    .filter(b -> b.date().equals(currentDate))
+                    .toList();
+                List<LocalTime[]> available = subtractBlocks(openWindow[0], openWindow[1], dateBlocks);
+
+                for (UUID divId : divisionIds) {
+                    LocalDate[] window = divisionWindows.get(divId);
+                    if (currentDate.isBefore(window[0]) || currentDate.isAfter(window[1])) continue;
+                    if (isFieldLockedToOtherDivision(field, currentDate, divId)) continue;
+                    if (isDivisionPinnedElsewhere(league, field, currentDate, divId)) continue;
+
+                    int duration = divisionPracticeDuration(league, divId);
+                    for (LocalTime[] avWindow : available) {
+                        LocalTime slotStart = avWindow[0];
+                        while (!slotStart.plusMinutes(duration).isAfter(avWindow[1])) {
+                            slotsByDiv.get(divId).add(
+                                new Slot(currentDate, field.id(), field.name(), slotStart));
+                            slotStart = slotStart.plusMinutes(GRID_MINUTES);
+                        }
+                    }
+                }
+            }
+        }
+        return slotsByDiv;
+    }
+
+    private PracticeScheduleResult buildAndSolvePractices(
+            League league,
+            Map<UUID, List<PracticeFixture>> fixturesByDiv,
+            Map<UUID, List<Slot>> slotsByDiv,
+            Map<UUID, Integer> slotCounts,
+            long startMs) {
+
+        CpModel model = new CpModel();
+
+        List<PracticeVar> allPracticeVars = new ArrayList<>();
+        Map<UUID, List<PracticeVar>> byFixture = new LinkedHashMap<>();
+        Map<String, List<BoolVar>> byFieldTick = new HashMap<>();
+        Map<String, List<PracticeVar>> byTeamDate = new HashMap<>();
+        Map<String, List<PracticeVar>> byTeamWeek = new HashMap<>();
+
+        int varIndex = 0;
+        for (Map.Entry<UUID, List<PracticeFixture>> divEntry : fixturesByDiv.entrySet()) {
+            UUID divId = divEntry.getKey();
+            List<PracticeFixture> fixtures = divEntry.getValue();
+            List<Slot> slots = slotsByDiv.getOrDefault(divId, List.of());
+
+            for (PracticeFixture fixture : fixtures) {
+                byFixture.put(fixture.slotId(), new ArrayList<>());
+                for (Slot slot : slots) {
+                    BoolVar var = model.newBoolVar("p" + varIndex++);
+                    PracticeVar pv = new PracticeVar(var, fixture, slot);
+                    allPracticeVars.add(pv);
+                    byFixture.get(fixture.slotId()).add(pv);
+
+                    int practiceStart = slot.startMinutes();
+                    int practiceEnd = practiceStart + fixture.durationMinutes() + BUFFER_MINUTES;
+                    String fieldDate = slot.fieldId() + "|" + slot.date() + "|";
+                    for (int t = practiceStart; t < practiceEnd; t += GRID_MINUTES) {
+                        byFieldTick.computeIfAbsent(fieldDate + t, k -> new ArrayList<>()).add(var);
+                    }
+
+                    // Single team per practice — register under one key, not home + away.
+                    String teamKey = fixture.teamId() + "|" + slot.date();
+                    byTeamDate.computeIfAbsent(teamKey, k -> new ArrayList<>()).add(pv);
+
+                    var weekFields = WeekFields.ISO;
+                    String weekKey = slot.date().get(weekFields.weekOfWeekBasedYear())
+                        + "|" + slot.date().get(weekFields.weekBasedYear());
+                    byTeamWeek.computeIfAbsent(fixture.teamId() + "|" + weekKey,
+                        k -> new ArrayList<>()).add(pv);
+                }
+            }
+        }
+
+        // C1: Each practice slot assigned at most once.
+        Map<UUID, BoolVar> isAssigned = new LinkedHashMap<>();
+        for (Map.Entry<UUID, List<PracticeVar>> entry : byFixture.entrySet()) {
+            UUID slotId = entry.getKey();
+            List<PracticeVar> vars = entry.getValue();
+            Literal[] lits = vars.stream().map(pv -> (Literal) pv.var()).toArray(Literal[]::new);
+            model.addAtMostOne(lits);
+            BoolVar assigned = model.newBoolVar("a" + varIndex++);
+            model.addEquality(assigned, LinearExpr.sum(lits));
+            isAssigned.put(slotId, assigned);
+        }
+
+        // C2: At each 15-min tick, at most one practice may be active on a given field.
+        for (List<BoolVar> tickVars : byFieldTick.values()) {
+            if (tickVars.size() > 1) {
+                Literal[] lits = tickVars.stream().map(v -> (Literal) v).toArray(Literal[]::new);
+                model.addAtMostOne(lits);
+            }
+        }
+
+        // C3: No team practices twice on the same calendar day.
+        for (List<PracticeVar> teamDayVars : byTeamDate.values()) {
+            if (teamDayVars.size() > 1) {
+                Literal[] lits = teamDayVars.stream().map(pv -> (Literal) pv.var()).toArray(Literal[]::new);
+                model.addAtMostOne(lits);
+            }
+        }
+
+        int totalFixtures = fixturesByDiv.values().stream().mapToInt(List::size).sum();
+
+        Literal[] allAssignedLits = isAssigned.values().stream()
+            .map(v -> (Literal) v).toArray(Literal[]::new);
+        IntVar totalAssignedVar = model.newIntVar(0, totalFixtures, "total_assigned");
+        model.addEquality(totalAssignedVar, LinearExpr.sum(allAssignedLits));
+
+        LeagueConfig config = league.config();
+        int weekCap = (config != null && config.maxGamesPerWeek() != null)
+            ? config.maxGamesPerWeek() : DEFAULT_MAX_GAMES_PER_WEEK;
+        int restDays = (config != null && config.minRestDays() != null)
+            ? config.minRestDays() : DEFAULT_MIN_REST_DAYS;
+
+        // C4: No team exceeds weekCap practices in a single ISO week.
+        IntVar maxWeekLoad = model.newIntVar(0, weekCap, "max_week_load");
+        for (List<PracticeVar> weekVars : byTeamWeek.values()) {
+            if (!weekVars.isEmpty()) {
+                Literal[] lits = weekVars.stream().map(pv -> (Literal) pv.var()).toArray(Literal[]::new);
+                model.addLessOrEqual(LinearExpr.sum(lits), LinearExpr.constant(weekCap));
+                model.addLessOrEqual(LinearExpr.sum(lits), maxWeekLoad);
+            }
+        }
+
+        // C5: Min rest days between consecutive practices for the same team.
+        if (restDays > 0) {
+            for (Map.Entry<String, List<PracticeVar>> entry : byTeamDate.entrySet()) {
+                if (entry.getValue().isEmpty()) continue;
+                String[] parts = entry.getKey().split("\\|", 2);
+                String teamIdStr = parts[0];
+                LocalDate date = LocalDate.parse(parts[1]);
+                for (int r = 1; r <= restDays; r++) {
+                    List<PracticeVar> nextDayVars = byTeamDate.getOrDefault(
+                        teamIdStr + "|" + date.plusDays(r), List.of());
+                    if (nextDayVars.isEmpty()) continue;
+                    List<Literal> combined = new ArrayList<>();
+                    entry.getValue().forEach(pv -> combined.add(pv.var()));
+                    nextDayVars.forEach(pv -> combined.add(pv.var()));
+                    if (combined.size() > 1) {
+                        model.addAtMostOne(combined.toArray(Literal[]::new));
+                    }
+                }
+            }
+        }
+
+        long bigM = (long) totalFixtures + 1;
+        model.maximize(LinearExpr.weightedSum(
+            new IntVar[]{totalAssignedVar, maxWeekLoad},
+            new long[]{bigM, -1L}
+        ));
+
+        CpSolver solver = new CpSolver();
+        solver.getParameters().setMaxTimeInSeconds(SOLVER_TIME_LIMIT_SECONDS);
+        ProgressCallback callback = new ProgressCallback(SOLVER_TIME_LIMIT_SECONDS);
+        CpSolverStatus status = solver.solve(model, callback);
+
+        if (status == CpSolverStatus.UNKNOWN) {
+            return PracticeScheduleResult.failure(
+                "Error: Solver timed out without assigning any practices. "
+                + "Try extending the practice window or adding more field availability.");
+        }
+        if (status == CpSolverStatus.INFEASIBLE) {
+            return PracticeScheduleResult.failure(
+                "Error: Solver returned an unexpected result. Please report this bug.");
+        }
+
+        Map<UUID, Slot> assignmentsBySlotId = new LinkedHashMap<>();
+        Map<UUID, Long> assignedByDiv = new HashMap<>();
+        for (PracticeVar pv : allPracticeVars) {
+            if (solver.booleanValue(pv.var())) {
+                assignmentsBySlotId.put(pv.fixture().slotId(), pv.slot());
+                assignedByDiv.merge(pv.fixture().divisionId(), 1L, Long::sum);
+            }
+        }
+
+        int elapsed = (int)((System.currentTimeMillis() - startMs) / 1000);
+        String completionStatus = (assignmentsBySlotId.size() == totalFixtures ? "target-met" : "partial")
+            + (status == CpSolverStatus.OPTIMAL ? ", optimal" : "");
+        System.out.printf("[%d:%02d] Solver complete. %d of %d practice slots assigned (%s).%n",
+            elapsed / 60, elapsed % 60, assignmentsBySlotId.size(), totalFixtures, completionStatus);
+        System.out.flush();
+
+        List<DivisionSummary> summaries = fixturesByDiv.entrySet().stream()
+            .map(e -> {
+                UUID divId = e.getKey();
+                int requested = e.getValue().size();
+                int assignedCount = assignedByDiv.getOrDefault(divId, 0L).intValue();
+                int slots = slotCounts.getOrDefault(divId, 0);
+                return new DivisionSummary(divisionName(league, divId), requested, assignedCount, slots);
+            })
+            .sorted(Comparator.comparing(DivisionSummary::divisionName))
+            .toList();
+
+        return PracticeScheduleResult.success(assignmentsBySlotId,
+            status == CpSolverStatus.OPTIMAL, summaries);
+    }
+
+    private int divisionPracticeDuration(League league, UUID divId) {
+        return league.divisions().stream()
+            .filter(d -> d.id().equals(divId))
+            .findFirst()
+            .map(Division::practiceDurationMinutes)
+            .orElseThrow();
     }
 
     // --- Progress callback ---

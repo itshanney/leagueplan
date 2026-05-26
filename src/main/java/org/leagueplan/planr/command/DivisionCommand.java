@@ -3,7 +3,6 @@ package org.leagueplan.planr.command;
 import org.leagueplan.planr.PlanrApp;
 import org.leagueplan.planr.model.Division;
 import org.leagueplan.planr.model.League;
-import org.leagueplan.planr.model.Team;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Option;
@@ -12,6 +11,8 @@ import picocli.CommandLine.ParentCommand;
 import picocli.CommandLine.Spec;
 
 import java.io.IOException;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -73,7 +74,8 @@ public class DivisionCommand implements Runnable {
                     System.err.printf("Error: Division \"%s\" already exists.%n", name);
                     return 1;
                 }
-                Division division = new Division(UUID.randomUUID(), name, duration, target, List.of());
+                Division division = new Division(UUID.randomUUID(), name, duration, target,
+                    List.of(), null, null, null, null);
                 parent.app.store.save(league.withDivisionAdded(division));
                 System.out.printf("Division \"%s\" added (%d min/game, target %d games/team).%n",
                     name, duration, target);
@@ -102,10 +104,30 @@ public class DivisionCommand implements Runnable {
         @Option(names = "--target", paramLabel = "<n>", description = "New target games per team.")
         Integer newTarget;
 
+        @Option(names = "--practice-count", paramLabel = "<n>",
+                description = "Number of practices per team before the season.")
+        Integer newPracticeCount;
+
+        @Option(names = "--practice-duration-minutes", paramLabel = "<minutes>",
+                description = "Practice slot duration in minutes.")
+        Integer newPracticeDurationMinutes;
+
+        @Option(names = "--practice-start", paramLabel = "<YYYY-MM-DD>",
+                description = "Practice window start date (inclusive).")
+        String newPracticeStartStr;
+
+        @Option(names = "--practice-end", paramLabel = "<YYYY-MM-DD>",
+                description = "Practice window end date (inclusive).")
+        String newPracticeEndStr;
+
         @Override
         public Integer call() {
-            if (newName == null && newDuration == null && newTarget == null) {
-                System.err.println("Error: At least one of --name, --duration, or --target must be provided.");
+            if (newName == null && newDuration == null && newTarget == null
+                    && newPracticeCount == null && newPracticeDurationMinutes == null
+                    && newPracticeStartStr == null && newPracticeEndStr == null) {
+                System.err.println("Error: At least one of --name, --duration, --target, "
+                    + "--practice-count, --practice-duration-minutes, --practice-start, "
+                    + "or --practice-end must be provided.");
                 return 1;
             }
             if (newName != null && newName.isBlank()) {
@@ -120,6 +142,38 @@ public class DivisionCommand implements Runnable {
                 System.err.printf("Error: Target games per team must be a positive integer (got: %d).%n", newTarget);
                 return 1;
             }
+            if (newPracticeCount != null && newPracticeCount < 1) {
+                System.err.printf("Error: --practice-count must be a positive integer (got: %d).%n",
+                    newPracticeCount);
+                return 1;
+            }
+            if (newPracticeDurationMinutes != null && newPracticeDurationMinutes < 1) {
+                System.err.printf("Error: --practice-duration-minutes must be a positive integer (got: %d).%n",
+                    newPracticeDurationMinutes);
+                return 1;
+            }
+
+            LocalDate newPracticeStart = null;
+            LocalDate newPracticeEnd = null;
+            if (newPracticeStartStr != null) {
+                try {
+                    newPracticeStart = LocalDate.parse(newPracticeStartStr.trim());
+                } catch (DateTimeParseException e) {
+                    System.err.printf("Error: Invalid date \"%s\" for --practice-start. Expected YYYY-MM-DD.%n",
+                        newPracticeStartStr);
+                    return 1;
+                }
+            }
+            if (newPracticeEndStr != null) {
+                try {
+                    newPracticeEnd = LocalDate.parse(newPracticeEndStr.trim());
+                } catch (DateTimeParseException e) {
+                    System.err.printf("Error: Invalid date \"%s\" for --practice-end. Expected YYYY-MM-DD.%n",
+                        newPracticeEndStr);
+                    return 1;
+                }
+            }
+
             try {
                 League league = parent.app.store.load();
                 var existing = league.findDivision(name);
@@ -127,12 +181,44 @@ public class DivisionCommand implements Runnable {
                     System.err.printf("Error: Division \"%s\" not found.%n", name);
                     return 1;
                 }
+                Division division = existing.get();
+
                 if (newName != null && !newName.equalsIgnoreCase(name) && league.hasDivision(newName)) {
                     System.err.printf("Error: Division \"%s\" already exists.%n", newName);
                     return 1;
                 }
-                Division updated = applyEdits(existing.get(), newName, newDuration, newTarget);
-                parent.app.store.save(league.withDivisionReplaced(existing.get().id(), updated));
+
+                // Resolve effective practice dates by falling back to stored values.
+                LocalDate effectiveStart = (newPracticeStart != null) ? newPracticeStart : division.practiceStart();
+                LocalDate effectiveEnd   = (newPracticeEnd   != null) ? newPracticeEnd   : division.practiceEnd();
+
+                if (effectiveStart != null && effectiveEnd != null
+                        && effectiveEnd.isBefore(effectiveStart)) {
+                    System.err.printf(
+                        "Error: --practice-end (%s) must not be before --practice-start (%s).%n",
+                        effectiveEnd, effectiveStart);
+                    return 1;
+                }
+
+                LocalDate seasonStart = (league.config() != null) ? league.config().seasonStart() : null;
+                if (seasonStart != null) {
+                    if (effectiveStart != null && !effectiveStart.isBefore(seasonStart)) {
+                        System.err.printf(
+                            "Error: --practice-start (%s) must be before seasonStart (%s).%n",
+                            effectiveStart, seasonStart);
+                        return 1;
+                    }
+                    if (effectiveEnd != null && !effectiveEnd.isBefore(seasonStart)) {
+                        System.err.printf(
+                            "Error: --practice-end (%s) must be before seasonStart (%s).%n",
+                            effectiveEnd, seasonStart);
+                        return 1;
+                    }
+                }
+
+                Division updated = applyEdits(division, newName, newDuration, newTarget,
+                    newPracticeCount, newPracticeDurationMinutes, newPracticeStart, newPracticeEnd);
+                parent.app.store.save(league.withDivisionReplaced(division.id(), updated));
                 System.out.printf("Division \"%s\" updated.%n", updated.name());
                 return 0;
             } catch (IOException e) {
@@ -141,11 +227,23 @@ public class DivisionCommand implements Runnable {
             }
         }
 
-        private Division applyEdits(Division division, String newName, Integer newDuration, Integer newTarget) {
-            String resolvedName = (newName != null) ? newName : division.name();
-            int resolvedDuration = (newDuration != null) ? newDuration : division.gameDurationMinutes();
-            int resolvedTarget = (newTarget != null) ? newTarget : division.targetGamesPerTeam();
-            return new Division(division.id(), resolvedName, resolvedDuration, resolvedTarget, division.teams());
+        private Division applyEdits(Division division,
+                String newName, Integer newDuration, Integer newTarget,
+                Integer newPracticeCount, Integer newPracticeDurationMinutes,
+                LocalDate newPracticeStart, LocalDate newPracticeEnd) {
+            String resolvedName     = (newName     != null) ? newName     : division.name();
+            int resolvedDuration    = (newDuration != null) ? newDuration : division.gameDurationMinutes();
+            int resolvedTarget      = (newTarget   != null) ? newTarget   : division.targetGamesPerTeam();
+            Integer resolvedCount   = (newPracticeCount != null)
+                ? newPracticeCount : division.practiceCount();
+            Integer resolvedPracMin = (newPracticeDurationMinutes != null)
+                ? newPracticeDurationMinutes : division.practiceDurationMinutes();
+            LocalDate resolvedStart = (newPracticeStart != null)
+                ? newPracticeStart : division.practiceStart();
+            LocalDate resolvedEnd   = (newPracticeEnd   != null)
+                ? newPracticeEnd   : division.practiceEnd();
+            return new Division(division.id(), resolvedName, resolvedDuration, resolvedTarget,
+                division.teams(), resolvedCount, resolvedPracMin, resolvedStart, resolvedEnd);
         }
     }
 
@@ -204,27 +302,46 @@ public class DivisionCommand implements Runnable {
             }
         }
 
-        private void printTable(java.util.List<Division> divisions) {
-            int nameWidth = Math.max(
+        private void printTable(List<Division> divisions) {
+            int nameW = Math.max(
                 "DIVISION".length(),
                 divisions.stream().mapToInt(d -> d.name().length()).max().orElse(0));
-            int durationWidth = Math.max(
+            int durationW = Math.max(
                 "DURATION".length(),
                 divisions.stream().mapToInt(d -> (d.gameDurationMinutes() + " min").length()).max().orElse(0));
-            int targetWidth = Math.max(
+            int targetW = Math.max(
                 "TARGET".length(),
                 divisions.stream().mapToInt(d -> targetLabel(d).length()).max().orElse(0));
-            int teamsWidth = Math.max(
+            int teamsW = Math.max(
                 "TEAMS".length(),
                 divisions.stream().mapToInt(d -> String.valueOf(d.teams().size()).length()).max().orElse(0));
+            int pracCountW = Math.max(
+                "PRAC_COUNT".length(),
+                divisions.stream().mapToInt(d -> pracCountLabel(d).length()).max().orElse(0));
+            int pracMinW = Math.max(
+                "PRAC_MIN".length(),
+                divisions.stream().mapToInt(d -> pracMinLabel(d).length()).max().orElse(0));
+            int pracStartW = Math.max(
+                "PRAC_START".length(),
+                divisions.stream().mapToInt(d -> pracDateLabel(d.practiceStart()).length()).max().orElse(0));
+            int pracEndW = Math.max(
+                "PRAC_END".length(),
+                divisions.stream().mapToInt(d -> pracDateLabel(d.practiceEnd()).length()).max().orElse(0));
 
-            String fmt = "%-" + nameWidth + "s    %-" + durationWidth + "s    %-" + targetWidth + "s    %-" + teamsWidth + "s%n";
-            System.out.printf(fmt, "DIVISION", "DURATION", "TARGET", "TEAMS");
-            System.out.printf(fmt, "-".repeat(nameWidth), "-".repeat(durationWidth),
-                "-".repeat(targetWidth), "-".repeat(teamsWidth));
-            divisions.forEach(d ->
-                System.out.printf(fmt, d.name(), d.gameDurationMinutes() + " min",
-                    targetLabel(d), d.teams().size()));
+            String fmt = "%-" + nameW + "s    %-" + durationW + "s    %-" + targetW + "s    %-"
+                + teamsW + "s    %-" + pracCountW + "s    %-" + pracMinW + "s    %-"
+                + pracStartW + "s    %-" + pracEndW + "s%n";
+
+            System.out.printf(fmt, "DIVISION", "DURATION", "TARGET", "TEAMS",
+                "PRAC_COUNT", "PRAC_MIN", "PRAC_START", "PRAC_END");
+            System.out.printf(fmt,
+                "-".repeat(nameW), "-".repeat(durationW), "-".repeat(targetW), "-".repeat(teamsW),
+                "-".repeat(pracCountW), "-".repeat(pracMinW), "-".repeat(pracStartW), "-".repeat(pracEndW));
+
+            divisions.forEach(d -> System.out.printf(fmt,
+                d.name(), d.gameDurationMinutes() + " min", targetLabel(d), d.teams().size(),
+                pracCountLabel(d), pracMinLabel(d),
+                pracDateLabel(d.practiceStart()), pracDateLabel(d.practiceEnd())));
 
             long unconfigured = divisions.stream().filter(d -> d.targetGamesPerTeam() == 0).count();
             if (unconfigured > 0) {
@@ -235,6 +352,19 @@ public class DivisionCommand implements Runnable {
 
         private String targetLabel(Division d) {
             return d.targetGamesPerTeam() == 0 ? "0*" : String.valueOf(d.targetGamesPerTeam());
+        }
+
+        private String pracCountLabel(Division d) {
+            return d.practiceCount() != null ? String.valueOf(d.practiceCount()) : "--";
+        }
+
+        private String pracMinLabel(Division d) {
+            return d.practiceDurationMinutes() != null
+                ? d.practiceDurationMinutes() + " min" : "--";
+        }
+
+        private String pracDateLabel(java.time.LocalDate date) {
+            return date != null ? date.toString() : "--";
         }
     }
 }

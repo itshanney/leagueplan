@@ -4,6 +4,107 @@ All notable changes to `planr` are documented here. Each entry references the pr
 
 ---
 
+## [0.10.0] — Pre-Season Practice Scheduling
+
+**PRD:** `features/2026-05-26-practice-scheduling.md`
+
+Adds a `planr practice` command group that lets organizers configure and schedule pre-season field time for each division before regular-season games begin. Phase 1 generates practice slot stubs (one per team per requested count); Phase 2 runs the existing CP-SAT solver cross-division to assign field/time slots within each division's practice window. Because the practice window is enforced to end before `seasonStart`, practice and game weeks never overlap — the weekly cap and rest-day constraints apply to practice-only activity during the practice period. Schema advances from v7 to v8.
+
+### Added
+
+- **`planr practice generate`** — Generates practice slot stubs for all divisions that have `practiceCount`, `practiceDurationMinutes`, `practiceStart`, and `practiceEnd` configured. Divisions missing any of the four values are skipped with a per-division warning line; divisions with an existing `PracticeSchedule` are also skipped. Prints a per-division line (`Generated T×P practice slots for <division>`) and a final summary. Exits 1 if no divisions qualify.
+
+- **`planr practice assign`** — Clears all prior field assignments and re-runs the CP-SAT solver across all divisions with a `PracticeSchedule` entity. Uses each division's `[practiceStart, practiceEnd]` window and `practiceDurationMinutes` for slot sizing. Field availability, blocks, overrides, and division locks are applied identically to the regular-season solver. `maxGamesPerWeek` caps weekly practices per team; `minRestDays` enforces rest gaps between consecutive practice assignments. Prints live `[M:SS]` progress lines, a constraint summary table, and a final status line. Partial assignments accepted (exit 0). Prompts for `yes` confirmation before starting.
+
+- **`planr practice status [--division <name>]`** — Without `--division`: prints a summary table with `DIVISION`, `STATE`, `ASSIGNED`, and `TOTAL` columns. State values: `NOT_CONFIGURED` (practice fields not set), `NOT_STARTED` (configured but not yet generated), `GENERATED`, `ASSIGNED`. With `--division`: prints a per-slot detail table (`TEAM`, `PRACTICE`, `DATE`, `TIME`, `FIELD`) sorted by team name; unassigned slots show `UNASSIGNED`. Exits 1 if the division or its schedule is not found.
+
+- **`planr practice clear --division <name>`** — Removes a division's `PracticeSchedule` entity after interactive confirmation, reverting it to `NOT_STARTED`. Prints the current state, slot count, and assigned count in the confirmation prompt. Exits 1 if no schedule exists for the division.
+
+- **`PracticeSchedule` record** — `(UUID divisionId, PracticeState state, List<PracticeSlot> slots)`. Persisted in `league.json` under the `practiceSchedules` key on `League`. Mutation helpers: `withSlots(List<PracticeSlot>)` and `withState(PracticeState)`.
+
+- **`PracticeSlot` record** — `(UUID slotId, UUID teamId, int slotNumber, LocalDate assignedDate, LocalTime assignedStartTime, UUID assignedFieldId)`. `slotNumber` is 1-based (1 of P, 2 of P, …). All three `assigned*` fields are `null` until Phase 2 runs. Mutation helpers: `withAssignment(date, time, fieldId)` and `withAssignmentCleared()`.
+
+- **`PracticeState` enum** — `GENERATED`, `ASSIGNED`.
+
+- **`PracticeScheduleResult` sealed interface** — `Success(Map<UUID,Slot> assignmentsBySlotId, boolean optimal, boolean targetMet, List<DivisionSummary> divisionSummaries)` and `Failure(String message)`. Mirrors `PlayoffScheduleResult` in shape; keyed on `slotId` rather than `gameId`.
+
+- **`PracticeFixture` record** — Internal scheduler type: `(UUID slotId, UUID teamId, UUID divisionId, int practiceDurationMinutes)`. Passed to `buildAndSolve` in place of `Fixture`; the single `teamId` is used as both home and away to satisfy the solver's per-team constraint keys.
+
+### Changed
+
+- **`planr division edit`** — Gains four new optional flags: `--practice-count <n>` (positive integer, ≥ 1), `--practice-duration-minutes <n>` (positive integer, ≥ 1), `--practice-start <YYYY-MM-DD>`, `--practice-end <YYYY-MM-DD>`. All flags are independent; only the supplied fields are updated. Validates: count and duration ≥ 1; end not before start; both start and end must be strictly before `config.seasonStart` (when season is configured). Any violation exits 1 with a specific error message.
+
+- **`planr division list`** — Adds four new columns: `PRACTICE COUNT`, `PRAC. DURATION`, `PRAC. START`, `PRAC. END`. Fields that have not been set are displayed as `--`.
+
+- **`Division` record** — Gains four new nullable fields at positions 6–9: `Integer practiceCount`, `Integer practiceDurationMinutes`, `LocalDate practiceStart`, `LocalDate practiceEnd`. All default to `null` when absent in existing JSON. New derived method: `isPracticeConfigured()` (all four fields non-null). New mutation helper: `withPracticeConfig(count, durationMinutes, start, end)`.
+
+- **`League` record** — Gains `List<PracticeSchedule> practiceSchedules` as the last constructor parameter. Compact constructor normalizes `null → List.of()`. New mutation helpers: `withPracticeScheduleAdded(PracticeSchedule)`, `withPracticeScheduleReplaced(UUID, PracticeSchedule)`, `withPracticeScheduleRemoved(UUID)`, `findPracticeSchedule(UUID)`.
+
+- **`SchedulerService`** — Gains `assignPractices(League, List<PracticeSchedule>)` public method. Converts each `PracticeSlot` to an internal `PracticeFixture` (single-team fixture); enumerates slots using each division's `[practiceStart, practiceEnd]` window and `practiceDurationMinutes`; delegates to the existing `buildAndSolve` and maps results to a `PracticeScheduleResult`.
+
+- **`PlanrApp`** — Registers `PracticeCommand` as a top-level subcommand alongside `PlayoffCommand`.
+
+- **`LeagueStore`** — v7→v8 migration block: no data transformation required; absent `practiceSchedules` key deserializes to `null`, normalized by the compact constructor. Version is stamped and written back.
+
+- **`League.CURRENT_VERSION`** — Advanced from `7` to `8`.
+
+### Tests
+
+- **`DivisionCommandPracticeTest`** — 20 tests across `PracticeCount`, `PracticeDurationMinutes`, `PracticeDates`, and `PracticeListColumns` nested classes: count persists and shows in list; count=0 exits 1; count negative exits 1; duration persists and shows; duration=0 exits 1; duration negative exits 1; dates persist and show; end-before-start exits 1; practice-start not before seasonStart exits 1; practice-end not before seasonStart exits 1; invalid start format exits 1; invalid end format exits 1; can set start alone when no end stored; validates new start against stored end; division list shows all four practice columns; `--` shown when fields unset.
+
+- **`PracticeCommandTest`** — 28 tests across `Generate`, `StatusSummary`, `StatusDetail`, `Clear`, and `Lifecycle` nested classes: generate prints slot count, handles multiple divisions, skips incomplete config, skips existing schedule, skips division with no teams, exits 1 when none qualify, persists schedule (status shows GENERATED), exits 2 on corrupt data; status summary shows NOT_CONFIGURED/NOT_STARTED/GENERATED with assigned+total counts, empty-league message, exits 2 on I/O error; status detail prints slot table, period header, slot numbers as "N of P", case-insensitive division lookup, exits 1 when division not found, exits 1 when no schedule; clear removes on confirmation, status reverts to NOT_STARTED, cancelled on non-yes, confirmation includes slot count, exits 1 when no division, exits 1 when no schedule, exits 2 on I/O error; lifecycle cycle and two-division independence.
+
+---
+
+## [0.9.0] — Double-Elimination Playoff Brackets
+
+**PRD:** `features/2026-05-26-playoffs-double-elimination.md`  
+**Spec:** `specs/2026-05-26-playoffs-double-elimination.md`
+
+Adds a `planr playoff` top-level command group for managing post-season double-elimination brackets. Phase 1 generates the bracket structure for a division given an ordered seed list; Phase 2 runs the existing CP-SAT field-assignment solver across all active brackets in a single cross-division solve using a playoff-specific date range. Bracket generation, field assignment, status viewing, and clearing are all independent commands. Schema advances from v6 to v7. Post-implementation Errata E-1 (see spec) is incorporated: `--seeds` was changed to a repeatable per-team flag to handle multi-word team names, and an `IndexOutOfBoundsException` in the L-R1 pairing loop for N = 7, 11, 13, 15 was corrected with a `GameRef` carrier.
+
+### Added
+
+- **`planr playoff generate`** — Validates the division, date range, and seed list (count, no duplicates, all names match division teams, no existing playoff for the division), then delegates to `PlayoffBracketService.generateBracket()` to produce the full double-elimination bracket. Persists a new `Playoff` record in `GENERATED` state. Prints a bracket summary table and a final summary line. `--seeds` accepts one team per flag invocation (`--seeds "Red Sox" --seeds Yankees …`), handling multi-word names without shell quoting issues.
+
+- **`planr playoff assign`** — Validates that at least one playoff exists and that all playoffs share identical start/end dates. Clears all prior field assignments, then calls `SchedulerService.assignPlayoffs()` to run the CP-SAT solver. Maps solver output back into `PlayoffGame` field assignments, transitions all `Playoff` records to `ASSIGNED` state, and saves. Prints active field division locks, a constraint summary table, and a final status line. Prompts for `yes` confirmation before starting.
+
+- **`planr playoff status [--division <name>]`** — Without `--division`: prints a one-line summary per division showing state (`NOT_STARTED` | `GENERATED` | `ASSIGNED`). With `--division`: prints the full bracket table with `SLOT`, `ROUND`, `POSITION A`, `POSITION B`, and `ASSIGNED` (date/time/field, `UNASSIGNED`, or `BYE`) columns. The conditional re-match slot is marked with `*`; a legend line is appended. Exits 1 when the division or its playoff is not found.
+
+- **`planr playoff clear --division <name>`** — Removes a division's `Playoff` record after interactive confirmation, reverting it to `NOT_STARTED`. The confirmation prompt includes the current state, real game slot count, and assigned count. Exits 1 when the division or playoff is not found.
+
+- **`Playoff` record** — `(UUID divisionId, LocalDate startDate, LocalDate endDate, PlayoffState state, List<PlayoffGame> games)`. Persisted in `league.json` under the `playoffs` key on `League`. Mutation helpers: `withGames(List<PlayoffGame>)`.
+
+- **`PlayoffGame` record** — One bracket slot: `(UUID gameId, String round, BracketSide bracketSide, String positionA, String positionB, LocalDate assignedDate, LocalTime assignedStartTime, UUID assignedFieldId, boolean isConditional, boolean isBye)`. Position strings use team names in R1 and positional references (`"W of G3"`, `"L of G2"`) in subsequent rounds. Mutation helpers: `withAssignment(date, time, fieldId)` and `withAssignmentCleared()`.
+
+- **`PlayoffState` enum** — `GENERATED`, `ASSIGNED`.
+
+- **`BracketSide` enum** — `WINNERS`, `LOSERS`, `CHAMPIONSHIP`.
+
+- **`PlayoffBracketService`** — Pure bracket generation: given an ordered list of N seed names (2 ≤ N ≤ 16), produces an ordered `List<BracketSlot>` for the full double-elimination structure. Pads to the next power of two P; top-seeded teams get byes in W-R1. Subsequent rounds use positional references. Invariants: real game count = 2N−1, bye count = P−N, exactly one conditional championship re-match slot. A private `GameRef(UUID gameId, String prefix)` carrier handles the L-R1 orphan case that occurs when the number of real W-R1 games is odd (N = 7, 11, 13, 15). Static helpers: `nextPowerOfTwo(int)`, `toPlayoffGame(BracketSlot)`.
+
+- **`PlayoffScheduleResult` sealed interface** — `Success(Map<UUID,Slot> assignmentsByGameId, boolean optimal, boolean targetMet, List<DivisionSummary> divisionSummaries)` and `Failure(String message)`. Thinner than `ScheduleResult` — keyed on `PlayoffGame.gameId` so `AssignCmd` can map solver output back to individual game records without modifying `buildScheduledGame`.
+
+### Changed
+
+- **`SchedulerService`** — Gains `assignPlayoffs(League, List<Playoff>)` public method. Converts non-bye `PlayoffGame` records to `Fixture` objects (R1 games use resolved team IDs; later-round games use deterministic pseudo-UUIDs so existing C3/C4/C5 constraints fire trivially per slot). Enumerates slots using the playoff date range via the existing `enumerateAllSlots` overload. Delegates to `buildAndSolve` unchanged. `enumerateAllSlots` gains an overloaded 4-arg form accepting an optional `Set<UUID> divisionIdFilter`; the existing 3-arg form delegates to it with an empty set (no filter).
+
+- **`League` record** — Gains `List<Playoff> playoffs` as the seventh constructor parameter. Compact constructor normalizes `null → List.of()`. New mutation helpers: `withPlayoffAdded(Playoff)`, `withPlayoffReplaced(UUID, Playoff)`, `withPlayoffRemoved(UUID)`, `findPlayoff(UUID)`. All existing `withX()` helpers updated to thread `playoffs` through.
+
+- **`PlanrApp`** — Registers `PlayoffCommand` as a top-level subcommand.
+
+- **`LeagueStore`** — v6→v7 migration block: no data transformation required; absent `playoffs` key deserializes to `null`, normalized by the compact constructor. Version is stamped and written back.
+
+- **`League.CURRENT_VERSION`** — Advanced from `6` to `7`.
+
+### Tests
+
+- **`PlayoffBracketServiceTest`** — 5 parameterized test suites running across all N in [2, 16] (15 values each): real game count = 2N−1; exactly one conditional; bye count = P−N; all game IDs unique; no exception thrown. Dedicated regression suite for the odd-N L-R1 crash: N = 7, 11, 13, 15 each assert no exception, correct real count, conditional count, and bye count. Nested classes for N=2 (slot counts, seed positions, championship placement), N=4 (slot counts, W-R1 seeding 1v4/2v3), N=5 (slot counts, bye-flag consistency, top seeds in bye slots), N=8 (slot counts, four W-R1 games). Championship slots: both in `CHAMPIONSHIP` side, exactly one conditional, conditional is last. Bracket side assignments: W-R1 non-bye slots are `WINNERS`, losers-bracket slots are `LOSERS`. Determinism: two calls with identical seeds produce identical structure (ignoring random gameIds). `toPlayoffGame` conversion: all fields preserved, all `assigned*` fields null.
+
+- **`PlayoffCommandTest`** — 34 tests across `Generate` (12), `StatusSummary` (5), `StatusDetail` (8), `Clear` (6), and `Lifecycle` (3) nested classes: generate exits 0 for 2/3/4-team brackets with correct bye counts; team names appear in bracket table; case-insensitive seed matching; persists to GENERATED state; exits 1 for unknown division, end-before-start, invalid date, seed count mismatch, unrecognized seed name, duplicate seeds, existing playoff; exits 2 on I/O error. Status summary NOT_STARTED/GENERATED states, all divisions shown even when partial, empty league; status detail full bracket table, period header, case-insensitive lookup, UNASSIGNED/BYE/conditional marker, exits 1 when not found. Clear: yes removes and reverts to NOT_STARTED, non-yes cancels, exits 1 for unknown division/missing playoff, exits 2 on I/O error. Lifecycle: full generate→status→clear cycle; can re-generate after clear; two divisions independent.
+
+---
+
 ## [0.8.0] — Scheduling Constraints & Field Division Locks
 
 **PRD:** `features/2026-05-25-scheduling-constraints.md`  

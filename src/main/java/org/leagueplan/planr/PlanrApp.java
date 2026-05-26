@@ -4,6 +4,7 @@ import org.leagueplan.planr.command.ConfigCommand;
 import org.leagueplan.planr.command.DivisionCommand;
 import org.leagueplan.planr.command.FieldCommand;
 import org.leagueplan.planr.command.PlayoffCommand;
+import org.leagueplan.planr.command.PracticeCommand;
 import org.leagueplan.planr.command.ScheduleCommand;
 import org.leagueplan.planr.command.TeamCommand;
 import org.leagueplan.planr.store.LeagueStore;
@@ -21,11 +22,12 @@ import picocli.CommandLine.Spec;
         ScheduleCommand.class,
         ConfigCommand.class,
         PlayoffCommand.class,
+        PracticeCommand.class,
         CommandLine.HelpCommand.class
     },
     description = "League Planner — schedule management for little league organizers.",
     mixinStandardHelpOptions = true,
-    version = "planr 1.0.0"
+    version = "planr 0.10.0"
 )
 public class PlanrApp implements Runnable {
 
