@@ -76,7 +76,7 @@ public class LeagueStore {
         }
         if (league.version() < 4) {
             List<Field> migratedFields = league.fields().stream()
-                .map(f -> new Field(f.id(), f.name(), f.address(), List.of(), List.of()))
+                .map(f -> new Field(f.id(), f.name(), f.address(), List.of(), List.of(), List.of()))
                 .toList();
             LeagueConfig config = LeagueConfig.empty();
             league = new League(4, config, league.divisions(), migratedFields, null, league.schedule());
@@ -90,6 +90,14 @@ public class LeagueStore {
         // the new fields (FAIL_ON_UNKNOWN_PROPERTIES is disabled), but they will be lost on next save.
         if (league.version() < 5) {
             league = new League(5, league.config(), league.divisions(), league.fields(),
+                league.teamSchedule(), league.schedule());
+            save(league);
+        }
+        // v5→v6: adds maxGamesPerWeek and minRestDays to LeagueConfig, and divisionLocks to Field.
+        // Both new fields are absent from old JSON; compact constructors normalize them to null / List.of()
+        // respectively, so no data transformation is required — this block only stamps the version.
+        if (league.version() < 6) {
+            league = new League(6, league.config(), league.divisions(), league.fields(),
                 league.teamSchedule(), league.schedule());
             save(league);
         }

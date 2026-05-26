@@ -2,6 +2,7 @@ package org.leagueplan.planr.scheduler;
 
 import org.leagueplan.planr.model.Division;
 import org.leagueplan.planr.model.Field;
+import org.leagueplan.planr.model.FieldDivisionLock;
 import org.leagueplan.planr.model.League;
 import org.leagueplan.planr.model.LeagueConfig;
 import org.leagueplan.planr.model.ScheduledGame;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.temporal.WeekFields;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -38,11 +40,11 @@ class SchedulerServiceTest {
 
     // Normal config: fields open 09:00–18:00 over the full season.
     private static final LeagueConfig CONFIG = new LeagueConfig(
-        LocalTime.of(9, 0), LocalTime.of(18, 0), SEASON_START, SEASON_END, List.of(), List.of());
+        LocalTime.of(9, 0), LocalTime.of(18, 0), SEASON_START, SEASON_END, List.of(), List.of(), null, null);
     // Narrow config: fields open 09:00–10:00 → exactly 1 slot/day for 60-min games.
     // Season dates are set to SEASON_START/SEASON_END; generateShort() swaps in SHORT_SEASON_END.
     private static final LeagueConfig NARROW_CONFIG = new LeagueConfig(
-        LocalTime.of(9, 0), LocalTime.of(10, 0), SEASON_START, SEASON_END, List.of(), List.of());
+        LocalTime.of(9, 0), LocalTime.of(10, 0), SEASON_START, SEASON_END, List.of(), List.of(), null, null);
 
     // ---------------------------------------------------------------------------
     // League builder helpers
@@ -59,7 +61,7 @@ class SchedulerServiceTest {
     }
 
     private static Field field(String name) {
-        return new Field(UUID.randomUUID(), name, null, List.of(), List.of());
+        return new Field(UUID.randomUUID(), name, null, List.of(), List.of(), List.of());
     }
 
     private static League league(LeagueConfig config, List<Division> divisions, List<Field> fields) {
@@ -110,7 +112,7 @@ class SchedulerServiceTest {
     private ScheduleResult generateShort(League l) {
         LeagueConfig shortConfig = new LeagueConfig(
             l.config().sunriseTime(), l.config().sunsetTime(), SEASON_START, SHORT_SEASON_END,
-            List.of(), List.of());
+            List.of(), List.of(), null, null);
         League shortLeague = new League(5, shortConfig, l.divisions(), l.fields(), l.teamSchedule(), null);
         return new SchedulerService().assign(shortLeague);
     }
@@ -452,7 +454,7 @@ class SchedulerServiceTest {
     void partialSuccessWhenSingleSlotAvailableForMultipleFixtures() {
         // 1-day season × 09:00-10:00 window = 1 slot; 4-team div = 12 fixtures → 1 game assigned
         LeagueConfig oneDayConfig = new LeagueConfig(
-            LocalTime.of(9, 0), LocalTime.of(10, 0), SEASON_START, SEASON_START, List.of(), List.of());
+            LocalTime.of(9, 0), LocalTime.of(10, 0), SEASON_START, SEASON_START, List.of(), List.of(), null, null);
         Team t1 = team("A"), t2 = team("B"), t3 = team("C"), t4 = team("D");
         Division div = division("Majors", 60, t1, t2, t3, t4);
         Field f = field("Riverside Park");
@@ -566,6 +568,376 @@ class SchedulerServiceTest {
                 "Unexpected away team name: " + g.awayTeamName());
             assertEquals("Riverside Park", g.fieldName());
             assertEquals("Majors", g.divisionName());
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // C4: Max games per week (hard cap)
+    // ---------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("C4: no team exceeds the configured max-games-per-week cap")
+    void noTeamExceedsWeekCap() {
+        // Cap = 1 game/week; 4-team div → needs many weeks to spread games
+        LeagueConfig capConfig = new LeagueConfig(
+            LocalTime.of(9, 0), LocalTime.of(18, 0), SEASON_START, SEASON_END,
+            List.of(), List.of(), 1, null);
+
+        Team t1 = team("Blue Jays"), t2 = team("Cardinals");
+        Team t3 = team("Red Sox"),   t4 = team("Yankees");
+        Division div = division("Majors", 60, t1, t2, t3, t4);
+        Field f = field("Riverside Park");
+        League l = league(capConfig, List.of(div), List.of(f));
+
+        ScheduleResult result = new SchedulerService().assign(l);
+        assertInstanceOf(ScheduleResult.Success.class, result);
+        List<ScheduledGame> games = ((ScheduleResult.Success) result).games();
+
+        // Collect per-team ISO-week game counts
+        Map<String, Integer> weekCounts = new HashMap<>();
+        for (ScheduledGame g : games) {
+            int isoWeek = g.date().get(WeekFields.ISO.weekOfWeekBasedYear());
+            int isoYear = g.date().get(WeekFields.ISO.weekBasedYear());
+            String homeKey = g.homeTeamId() + "|" + isoYear + "W" + isoWeek;
+            String awayKey = g.awayTeamId() + "|" + isoYear + "W" + isoWeek;
+            weekCounts.merge(homeKey, 1, Integer::sum);
+            weekCounts.merge(awayKey, 1, Integer::sum);
+        }
+
+        for (Map.Entry<String, Integer> entry : weekCounts.entrySet()) {
+            assertTrue(entry.getValue() <= 1,
+                "Team exceeded cap of 1 game/week in week " + entry.getKey()
+                + ": got " + entry.getValue());
+        }
+    }
+
+    @Test
+    @DisplayName("C4: default cap of 2 games/week is respected when no cap is configured")
+    void defaultWeekCapIsRespected() {
+        // CONFIG has null maxGamesPerWeek → default of 2 applies
+        ScheduleResult result = generate(fourTeamLeague());
+        assertInstanceOf(ScheduleResult.Success.class, result);
+        List<ScheduledGame> games = ((ScheduleResult.Success) result).games();
+
+        Map<String, Integer> weekCounts = new HashMap<>();
+        for (ScheduledGame g : games) {
+            int isoWeek = g.date().get(WeekFields.ISO.weekOfWeekBasedYear());
+            int isoYear = g.date().get(WeekFields.ISO.weekBasedYear());
+            String homeKey = g.homeTeamId() + "|" + isoYear + "W" + isoWeek;
+            String awayKey = g.awayTeamId() + "|" + isoYear + "W" + isoWeek;
+            weekCounts.merge(homeKey, 1, Integer::sum);
+            weekCounts.merge(awayKey, 1, Integer::sum);
+        }
+
+        for (Map.Entry<String, Integer> entry : weekCounts.entrySet()) {
+            assertTrue(entry.getValue() <= SchedulerService.DEFAULT_MAX_GAMES_PER_WEEK,
+                "Team exceeded default cap in week " + entry.getKey()
+                + ": got " + entry.getValue());
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // C5: Minimum rest days between games
+    // ---------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("C5: no team plays on back-to-back days when rest-days is set to 1")
+    void noTeamPlaysOnConsecutiveDays() {
+        // CONFIG.minRestDays = null → default of 1 applies; verify explicitly
+        ScheduleResult result = generate(fourTeamLeague());
+        assertInstanceOf(ScheduleResult.Success.class, result);
+        List<ScheduledGame> games = ((ScheduleResult.Success) result).games();
+
+        for (ScheduledGame a : games) {
+            for (ScheduledGame b : games) {
+                if (a == b) continue;
+                boolean sameTeam =
+                    a.homeTeamId().equals(b.homeTeamId()) ||
+                    a.homeTeamId().equals(b.awayTeamId()) ||
+                    a.awayTeamId().equals(b.homeTeamId()) ||
+                    a.awayTeamId().equals(b.awayTeamId());
+                if (!sameTeam) continue;
+                long daysBetween = Math.abs(a.date().toEpochDay() - b.date().toEpochDay());
+                assertTrue(daysBetween == 0 || daysBetween >= SchedulerService.DEFAULT_MIN_REST_DAYS + 1,
+                    "Team played with fewer than " + SchedulerService.DEFAULT_MIN_REST_DAYS
+                    + " rest day(s) between " + a.date() + " and " + b.date());
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("C5: rest-days=0 allows same-day double-headers (C3 prevents same-day games; rest=0 is satisfied)")
+    void restDaysZeroDoesNotBlockSameDayGames() {
+        // With restDays=0, no rest constraint beyond C3. Should still produce a valid schedule.
+        LeagueConfig noRestConfig = new LeagueConfig(
+            LocalTime.of(9, 0), LocalTime.of(18, 0), SEASON_START, SEASON_END,
+            List.of(), List.of(), null, 0);
+
+        Team t1 = team("Blue Jays"), t2 = team("Cardinals");
+        Division div = division("Majors", 60, t1, t2);
+        Field f = field("Riverside Park");
+        League l = league(noRestConfig, List.of(div), List.of(f));
+
+        ScheduleResult result = new SchedulerService().assign(l);
+        assertInstanceOf(ScheduleResult.Success.class, result);
+        assertTrue(((ScheduleResult.Success) result).targetMet(),
+            "Full schedule should be assigned when rest-days=0 with ample slots");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Field division lock (slot filtering)
+    // ---------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("field lock: locked field contributes 0 slots to non-owning division")
+    void lockedFieldContributesZeroSlotsToOtherDivision() {
+        // One field locked entirely to Majors; T-Ball gets no slots from that field
+        Team t1 = team("Blue Jays"), t2 = team("Cardinals");
+        Team tb1 = team("T1"), tb2 = team("T2");
+        Division majors = division("Majors", 60, t1, t2);
+        Division tBall  = division("T-Ball", 60, tb1, tb2);
+
+        UUID majorsId = majors.id();
+        FieldDivisionLock lock = new FieldDivisionLock(majorsId, SEASON_START, SEASON_END);
+        Field lockedField = new Field(UUID.randomUUID(), "Field A", null, List.of(), List.of(), List.of(lock));
+
+        League l = league(CONFIG, List.of(majors, tBall), List.of(lockedField));
+
+        int tBallSlots = new SchedulerService().estimateAvailableSlots(l, tBall.id(), 60);
+        assertEquals(0, tBallSlots,
+            "T-Ball should get 0 slots from a field locked entirely to Majors");
+    }
+
+    @Test
+    @DisplayName("field lock: locked field still contributes slots to the owning division")
+    void lockedFieldContributesSlotsToDivisionThatOwnsLock() {
+        Team t1 = team("Blue Jays"), t2 = team("Cardinals");
+        Division majors = division("Majors", 60, t1, t2);
+        UUID majorsId = majors.id();
+
+        FieldDivisionLock lock = new FieldDivisionLock(majorsId, SEASON_START, SEASON_END);
+        Field lockedField = new Field(UUID.randomUUID(), "Field A", null, List.of(), List.of(), List.of(lock));
+
+        League l = league(CONFIG, List.of(majors), List.of(lockedField));
+        int slotsWithLock = new SchedulerService().estimateAvailableSlots(l, majorsId, 60);
+
+        // Baseline: same field with no lock
+        Field unlockedField = new Field(UUID.randomUUID(), "Field A", null, List.of(), List.of(), List.of());
+        League baselineLeague = league(CONFIG, List.of(majors), List.of(unlockedField));
+        int slotsWithout = new SchedulerService().estimateAvailableSlots(baselineLeague, majorsId, 60);
+
+        assertEquals(slotsWithout, slotsWithLock,
+            "Owning division should see the same slots whether or not a lock is present");
+    }
+
+    @Test
+    @DisplayName("field lock: games are only assigned to the locked field for the owning division")
+    void lockedFieldOnlyHostsOwningDivisionGames() {
+        // Two divisions; field locked to Majors; second unlocked field available to both
+        Team m1 = team("Blue Jays"), m2 = team("Cardinals");
+        Team a1 = team("Red Sox"),   a2 = team("Yankees");
+        Division majors = division("Majors", 60, m1, m2);
+        Division aaa    = division("AAA",    60, a1, a2);
+
+        UUID majorsId = majors.id();
+        FieldDivisionLock lock = new FieldDivisionLock(majorsId, SEASON_START, SEASON_END);
+        Field lockedField   = new Field(UUID.randomUUID(), "Majors Field", null, List.of(), List.of(), List.of(lock));
+        Field unlockedField = new Field(UUID.randomUUID(), "Open Field",  null, List.of(), List.of(), List.of());
+
+        League l = league(CONFIG, List.of(majors, aaa), List.of(lockedField, unlockedField));
+        ScheduleResult result = new SchedulerService().assign(l);
+        assertInstanceOf(ScheduleResult.Success.class, result);
+
+        List<ScheduledGame> games = ((ScheduleResult.Success) result).games();
+        UUID lockedFieldId = lockedField.id();
+        UUID aaaId = aaa.id();
+
+        for (ScheduledGame g : games) {
+            if (g.fieldId().equals(lockedFieldId)) {
+                assertFalse(g.divisionName().equals("AAA"),
+                    "AAA game should never be assigned to Majors Field (locked to Majors)");
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("field lock: partial-period lock — non-owning division gets slots outside lock range")
+    void partialPeriodLockLeavesRestOfSeasonOpen() {
+        // Lock applies only to June; July onward is open to all divisions
+        Team t1 = team("Blue Jays"), t2 = team("Cardinals");
+        Team a1 = team("Red Sox"),   a2 = team("Yankees");
+        Division majors = division("Majors", 60, t1, t2);
+        Division aaa    = division("AAA",    60, a1, a2);
+
+        UUID majorsId = majors.id();
+        LocalDate lockEnd = LocalDate.of(2026, 6, 30);
+        FieldDivisionLock lock = new FieldDivisionLock(majorsId, SEASON_START, lockEnd);
+        Field lockedField = new Field(UUID.randomUUID(), "Field A", null, List.of(), List.of(), List.of(lock));
+
+        League l = league(CONFIG, List.of(majors, aaa), List.of(lockedField));
+
+        int aaaSlots = new SchedulerService().estimateAvailableSlots(l, aaa.id(), 60);
+        assertTrue(aaaSlots > 0,
+            "AAA should get slots from Field A outside the June lock period");
+
+        // Compare: full-season lock gives 0 for AAA
+        FieldDivisionLock fullLock = new FieldDivisionLock(majorsId, SEASON_START, SEASON_END);
+        Field fullyLockedField = new Field(UUID.randomUUID(), "Field A", null, List.of(), List.of(), List.of(fullLock));
+        League fullLeague = league(CONFIG, List.of(majors, aaa), List.of(fullyLockedField));
+        int aaaSlotsFullLock = new SchedulerService().estimateAvailableSlots(fullLeague, aaa.id(), 60);
+        assertEquals(0, aaaSlotsFullLock);
+
+        assertTrue(aaaSlots > aaaSlotsFullLock,
+            "Partial lock should yield more slots for AAA than a full-season lock");
+    }
+
+    // ---------------------------------------------------------------------------
+    // E1: Bidirectional pinning — owning division is confined to its locked field
+    // ---------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("E1: all owning division games are assigned to the locked field, not the unlocked one")
+    void owningDivisionGamesOnlyOnLockedField() {
+        Team m1 = team("Blue Jays"), m2 = team("Cardinals");
+        Division majors = division("Majors", 60, m1, m2);
+        UUID majorsId = majors.id();
+
+        FieldDivisionLock lock = new FieldDivisionLock(majorsId, SEASON_START, SEASON_END);
+        Field lockedField   = new Field(UUID.randomUUID(), "Locked Field",   null, List.of(), List.of(), List.of(lock));
+        Field unlockedField = new Field(UUID.randomUUID(), "Unlocked Field", null, List.of(), List.of(), List.of());
+
+        League l = league(CONFIG, List.of(majors), List.of(lockedField, unlockedField));
+        ScheduleResult result = new SchedulerService().assign(l);
+        assertInstanceOf(ScheduleResult.Success.class, result);
+        assertTrue(((ScheduleResult.Success) result).targetMet(),
+            "Locked field has ample capacity — full target should be met");
+
+        UUID lockedFieldId = lockedField.id();
+        for (ScheduledGame g : ((ScheduleResult.Success) result).games()) {
+            assertEquals(lockedFieldId, g.fieldId(),
+                "Game on " + g.date() + " landed on \"" + g.fieldName()
+                + "\" — owning division must be confined to the locked field");
+        }
+    }
+
+    @Test
+    @DisplayName("E1: adding an unlocked field does not increase slot count for a pinned division")
+    void addingUnlockedFieldDoesNotIncreaseSlotCountForPinnedDivision() {
+        Team t1 = team("Blue Jays"), t2 = team("Cardinals");
+        Division majors = division("Majors", 60, t1, t2);
+        UUID majorsId = majors.id();
+
+        FieldDivisionLock lock = new FieldDivisionLock(majorsId, SEASON_START, SEASON_END);
+        Field lockedField   = new Field(UUID.randomUUID(), "Locked",   null, List.of(), List.of(), List.of(lock));
+        Field unlockedField = new Field(UUID.randomUUID(), "Unlocked", null, List.of(), List.of(), List.of());
+
+        League oneFieldLeague = league(CONFIG, List.of(majors), List.of(lockedField));
+        League twoFieldLeague = league(CONFIG, List.of(majors), List.of(lockedField, unlockedField));
+
+        int slotsOneField  = new SchedulerService().estimateAvailableSlots(oneFieldLeague, majorsId, 60);
+        int slotsTwoFields = new SchedulerService().estimateAvailableSlots(twoFieldLeague, majorsId, 60);
+
+        assertEquals(slotsOneField, slotsTwoFields,
+            "Unlocked field must not contribute slots to a division pinned to a different field");
+    }
+
+    @Test
+    @DisplayName("E1: pinning is released outside the lock date range — both fields contribute in July")
+    void pinningIsReleasedOutsideLockDateRange() {
+        Team t1 = team("Blue Jays"), t2 = team("Cardinals");
+        Division majors = division("Majors", 60, t1, t2);
+        UUID majorsId = majors.id();
+
+        LocalDate juneEnd   = LocalDate.of(2026, 6, 30);
+        LocalDate julyStart = LocalDate.of(2026, 7, 1);
+        LocalDate julyEnd   = LocalDate.of(2026, 7, 31);
+
+        // Lock active only in June; season for this test is July only
+        FieldDivisionLock juneLock  = new FieldDivisionLock(majorsId, SEASON_START, juneEnd);
+        Field pinnedField   = new Field(UUID.randomUUID(), "Pinned",   null, List.of(), List.of(), List.of(juneLock));
+        Field unlockedField = new Field(UUID.randomUUID(), "Unlocked", null, List.of(), List.of(), List.of());
+
+        LeagueConfig julyConfig = new LeagueConfig(
+            LocalTime.of(9, 0), LocalTime.of(18, 0), julyStart, julyEnd,
+            List.of(), List.of(), null, null);
+
+        League twoFieldLeague    = league(julyConfig, List.of(majors), List.of(pinnedField, unlockedField));
+        League singleFieldLeague = league(julyConfig, List.of(majors), List.of(unlockedField));
+
+        int slotsWithBoth   = new SchedulerService().estimateAvailableSlots(twoFieldLeague,    majorsId, 60);
+        int slotsWithSingle = new SchedulerService().estimateAvailableSlots(singleFieldLeague, majorsId, 60);
+
+        assertEquals(2 * slotsWithSingle, slotsWithBoth,
+            "Lock expired before July — both fields must contribute, doubling slot count");
+    }
+
+    @Test
+    @DisplayName("E1: division locked to two different fields in sequential periods gets slots from each in turn")
+    void divisionLockedToTwoFieldsSequentiallyGetsSlotsFromEachPeriod() {
+        Team t1 = team("Blue Jays"), t2 = team("Cardinals");
+        Division majors = division("Majors", 60, t1, t2);
+        UUID majorsId = majors.id();
+
+        LocalDate juneEnd   = LocalDate.of(2026, 6, 30);
+        LocalDate julyStart = LocalDate.of(2026, 7, 1);
+        LocalDate julyEnd   = LocalDate.of(2026, 7, 31);
+
+        FieldDivisionLock lockA = new FieldDivisionLock(majorsId, SEASON_START, juneEnd);
+        FieldDivisionLock lockB = new FieldDivisionLock(majorsId, julyStart,    julyEnd);
+        Field fieldA = new Field(UUID.randomUUID(), "Field A", null, List.of(), List.of(), List.of(lockA));
+        Field fieldB = new Field(UUID.randomUUID(), "Field B", null, List.of(), List.of(), List.of(lockB));
+
+        LeagueConfig twoMonthConfig = new LeagueConfig(
+            LocalTime.of(9, 0), LocalTime.of(18, 0), SEASON_START, julyEnd,
+            List.of(), List.of(), null, null);
+
+        League l = league(twoMonthConfig, List.of(majors), List.of(fieldA, fieldB));
+        int totalSlots = new SchedulerService().estimateAvailableSlots(l, majorsId, 60);
+
+        // In June (30 days), only Field A is usable; in July (31 days), only Field B is usable.
+        // Global window 09:00–18:00, 60-min games, 15-min grid: (9h×60 − 60) / 15 + 1 = 33 slots/day.
+        int slotsPerFieldPerDay = ((18 - 9) * 60 - 60) / 15 + 1;
+        int expected = 30 * slotsPerFieldPerDay + 31 * slotsPerFieldPerDay;
+
+        assertEquals(expected, totalSlots,
+            "Slots should equal Field A's June capacity + Field B's July capacity only");
+    }
+
+    @Test
+    @DisplayName("E1: pinned division still excluded from non-locked fields alongside non-owning division exclusion")
+    void pinningAndExclusionCoexistCorrectly() {
+        // Three fields: one locked to Majors, one locked to AAA, one open.
+        // Majors must use only the Majors-locked field; AAA must use only the AAA-locked field.
+        // Neither should land on the open field.
+        Team m1 = team("Blue Jays"), m2 = team("Cardinals");
+        Team a1 = team("Red Sox"),   a2 = team("Yankees");
+        Division majors = division("Majors", 60, m1, m2);
+        Division aaa    = division("AAA",    60, a1, a2);
+
+        UUID majorsId = majors.id();
+        UUID aaaId    = aaa.id();
+
+        FieldDivisionLock majorsLock = new FieldDivisionLock(majorsId, SEASON_START, SEASON_END);
+        FieldDivisionLock aaaLock    = new FieldDivisionLock(aaaId,    SEASON_START, SEASON_END);
+        Field majorsField = new Field(UUID.randomUUID(), "Majors Field", null, List.of(), List.of(), List.of(majorsLock));
+        Field aaaField    = new Field(UUID.randomUUID(), "AAA Field",    null, List.of(), List.of(), List.of(aaaLock));
+        Field openField   = new Field(UUID.randomUUID(), "Open Field",   null, List.of(), List.of(), List.of());
+
+        League l = league(CONFIG, List.of(majors, aaa), List.of(majorsField, aaaField, openField));
+        ScheduleResult result = new SchedulerService().assign(l);
+        assertInstanceOf(ScheduleResult.Success.class, result);
+
+        UUID majorsFieldId = majorsField.id();
+        UUID aaaFieldId    = aaaField.id();
+
+        for (ScheduledGame g : ((ScheduleResult.Success) result).games()) {
+            if (g.divisionName().equals("Majors")) {
+                assertEquals(majorsFieldId, g.fieldId(),
+                    "Majors game must be on Majors Field, not on " + g.fieldName());
+            } else {
+                assertEquals(aaaFieldId, g.fieldId(),
+                    "AAA game must be on AAA Field, not on " + g.fieldName());
+            }
         }
     }
 

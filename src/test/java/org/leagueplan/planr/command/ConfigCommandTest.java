@@ -121,6 +121,76 @@ class ConfigCommandTest extends CommandTestBase {
         }
 
         @Test
+        @DisplayName("exits 0 when setting max-games-per-week to a valid value")
+        void setsMaxGamesPerWeek() {
+            int exit = execute("config", "set", "--max-games-per-week", "3");
+            assertEquals(0, exit);
+            assertTrue(stdout().contains("updated"));
+        }
+
+        @Test
+        @DisplayName("exits 1 when max-games-per-week is zero")
+        void failsWhenMaxGamesPerWeekIsZero() {
+            int exit = execute("config", "set", "--max-games-per-week", "0");
+            assertEquals(1, exit);
+            assertTrue(stderr().contains("positive integer"));
+        }
+
+        @Test
+        @DisplayName("exits 1 when max-games-per-week is negative")
+        void failsWhenMaxGamesPerWeekIsNegative() {
+            int exit = execute("config", "set", "--max-games-per-week", "-1");
+            assertEquals(1, exit);
+            assertTrue(stderr().contains("positive integer"));
+        }
+
+        @Test
+        @DisplayName("exits 0 when setting rest-days to a positive value")
+        void setsRestDays() {
+            int exit = execute("config", "set", "--rest-days", "2");
+            assertEquals(0, exit);
+            assertTrue(stdout().contains("updated"));
+        }
+
+        @Test
+        @DisplayName("exits 0 when setting rest-days to 0 (no rest required)")
+        void setsRestDaysToZero() {
+            int exit = execute("config", "set", "--rest-days", "0");
+            assertEquals(0, exit);
+        }
+
+        @Test
+        @DisplayName("exits 1 when rest-days is negative")
+        void failsWhenRestDaysIsNegative() {
+            int exit = execute("config", "set", "--rest-days", "-1");
+            assertEquals(1, exit);
+            assertTrue(stderr().contains("non-negative integer"));
+        }
+
+        @Test
+        @DisplayName("exits 0 when setting max-games-per-week and rest-days together")
+        void setsMaxGamesAndRestDaysTogether() {
+            int exit = execute("config", "set", "--max-games-per-week", "3", "--rest-days", "2");
+            assertEquals(0, exit);
+        }
+
+        @Test
+        @DisplayName("persists max-games-per-week so it appears in config show")
+        void persistsMaxGamesPerWeek() {
+            execute("config", "set", "--max-games-per-week", "3");
+            execute("config", "show");
+            assertTrue(stdout().contains("3"));
+        }
+
+        @Test
+        @DisplayName("persists rest-days so it appears in config show")
+        void persistsRestDays() {
+            execute("config", "set", "--rest-days", "2");
+            execute("config", "show");
+            assertTrue(stdout().contains("2"));
+        }
+
+        @Test
         @DisplayName("exits 2 on corrupted league data")
         void exitsOnCorruptedData() throws IOException {
             corruptLeagueFile();
@@ -168,6 +238,53 @@ class ConfigCommandTest extends CommandTestBase {
             assertTrue(out.contains("18:00"));
             assertTrue(out.contains("2026-06-01"));
             assertTrue(out.contains("2026-08-31"));
+        }
+
+        @Test
+        @DisplayName("shows max games/week and min rest days fields")
+        void showsConstraintFields() {
+            execute("config", "show");
+            String out = stdout();
+            assertTrue(out.contains("Max games/week"));
+            assertTrue(out.contains("Min rest days"));
+        }
+
+        @Test
+        @DisplayName("shows (default) for max-games-per-week when not explicitly set")
+        void showsDefaultLabelForMaxGamesPerWeek() {
+            execute("config", "show");
+            assertTrue(stdout().lines()
+                .filter(l -> l.contains("Max games/week"))
+                .anyMatch(l -> l.contains("(default)")));
+        }
+
+        @Test
+        @DisplayName("shows (default) for rest-days when not explicitly set")
+        void showsDefaultLabelForRestDays() {
+            execute("config", "show");
+            assertTrue(stdout().lines()
+                .filter(l -> l.contains("Min rest days"))
+                .anyMatch(l -> l.contains("(default)")));
+        }
+
+        @Test
+        @DisplayName("shows explicit value (no default label) for max-games-per-week when set")
+        void showsExplicitMaxGamesValue() {
+            execute("config", "set", "--max-games-per-week", "3");
+            execute("config", "show");
+            assertTrue(stdout().lines()
+                .filter(l -> l.contains("Max games/week"))
+                .anyMatch(l -> l.contains("3") && !l.contains("(default)")));
+        }
+
+        @Test
+        @DisplayName("shows explicit value (no default label) for rest-days when set")
+        void showsExplicitRestDaysValue() {
+            execute("config", "set", "--rest-days", "0");
+            execute("config", "show");
+            assertTrue(stdout().lines()
+                .filter(l -> l.contains("Min rest days"))
+                .anyMatch(l -> !l.contains("(default)")));
         }
 
         @Test

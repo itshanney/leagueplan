@@ -28,7 +28,7 @@ class LeagueConfigTest {
         @Test
         @DisplayName("normalizes null dowWindows to empty list")
         void normalizesNullDowWindows() {
-            LeagueConfig config = new LeagueConfig(T9, T18, null, null, null, List.of());
+            LeagueConfig config = new LeagueConfig(T9, T18, null, null, null, List.of(), null, null);
             assertNotNull(config.dowWindows());
             assertTrue(config.dowWindows().isEmpty());
         }
@@ -36,7 +36,7 @@ class LeagueConfigTest {
         @Test
         @DisplayName("normalizes null blockedDays to empty list")
         void normalizesNullBlockedDays() {
-            LeagueConfig config = new LeagueConfig(T9, T18, null, null, List.of(), null);
+            LeagueConfig config = new LeagueConfig(T9, T18, null, null, List.of(), null, null, null);
             assertNotNull(config.blockedDays());
             assertTrue(config.blockedDays().isEmpty());
         }
@@ -45,7 +45,7 @@ class LeagueConfigTest {
         @DisplayName("preserves non-null dowWindows unchanged")
         void preservesNonNullDowWindows() {
             DayOfWeekWindow window = new DayOfWeekWindow(DayOfWeek.WEDNESDAY, T17, T21);
-            LeagueConfig config = new LeagueConfig(T9, T18, null, null, List.of(window), List.of());
+            LeagueConfig config = new LeagueConfig(T9, T18, null, null, List.of(window), List.of(), null, null);
             assertEquals(1, config.dowWindows().size());
             assertEquals(DayOfWeek.WEDNESDAY, config.dowWindows().get(0).day());
         }

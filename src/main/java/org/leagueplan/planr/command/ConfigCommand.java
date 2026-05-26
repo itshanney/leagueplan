@@ -4,6 +4,7 @@ import org.leagueplan.planr.PlanrApp;
 import org.leagueplan.planr.model.DayOfWeekWindow;
 import org.leagueplan.planr.model.League;
 import org.leagueplan.planr.model.LeagueConfig;
+import org.leagueplan.planr.scheduler.SchedulerService;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Option;
@@ -64,11 +65,23 @@ public class ConfigCommand implements Runnable {
                 description = "Season end date.")
         String endStr;
 
+        @Option(names = "--max-games-per-week", paramLabel = "<N>",
+                description = "Max games any team may be scheduled per week (default: "
+                    + SchedulerService.DEFAULT_MAX_GAMES_PER_WEEK + ").")
+        String maxGamesPerWeekStr;
+
+        @Option(names = "--rest-days", paramLabel = "<N>",
+                description = "Minimum rest days required between a team's games (default: "
+                    + SchedulerService.DEFAULT_MIN_REST_DAYS + ").")
+        String restDaysStr;
+
         @Override
         public Integer call() {
-            if (sunriseStr == null && sunsetStr == null && startStr == null && endStr == null) {
+            if (sunriseStr == null && sunsetStr == null && startStr == null && endStr == null
+                    && maxGamesPerWeekStr == null && restDaysStr == null) {
                 System.err.println(
-                    "Error: At least one of --sunrise, --sunset, --start, or --end must be provided.");
+                    "Error: At least one of --sunrise, --sunset, --start, --end, "
+                    + "--max-games-per-week, or --rest-days must be provided.");
                 return 1;
             }
 
@@ -126,17 +139,45 @@ public class ConfigCommand implements Runnable {
                 return 1;
             }
 
+            Integer maxGamesPerWeek = null;
+            if (maxGamesPerWeekStr != null) {
+                try {
+                    maxGamesPerWeek = Integer.parseInt(maxGamesPerWeekStr);
+                    if (maxGamesPerWeek < 1) throw new NumberFormatException();
+                } catch (NumberFormatException e) {
+                    System.err.printf(
+                        "Error: --max-games-per-week must be a positive integer (got \"%s\").%n",
+                        maxGamesPerWeekStr);
+                    return 1;
+                }
+            }
+
+            Integer restDays = null;
+            if (restDaysStr != null) {
+                try {
+                    restDays = Integer.parseInt(restDaysStr);
+                    if (restDays < 0) throw new NumberFormatException();
+                } catch (NumberFormatException e) {
+                    System.err.printf(
+                        "Error: --rest-days must be a non-negative integer (got \"%s\").%n",
+                        restDaysStr);
+                    return 1;
+                }
+            }
+
             try {
                 League league = parent.app.store.load();
                 LeagueConfig existing = (league.config() != null) ? league.config() : LeagueConfig.empty();
 
                 LeagueConfig updated = new LeagueConfig(
-                    (sunrise != null) ? sunrise : existing.sunriseTime(),
-                    (sunset != null) ? sunset : existing.sunsetTime(),
-                    (seasonStart != null) ? seasonStart : existing.seasonStart(),
-                    (seasonEnd != null) ? seasonEnd : existing.seasonEnd(),
+                    (sunrise != null)       ? sunrise       : existing.sunriseTime(),
+                    (sunset != null)        ? sunset        : existing.sunsetTime(),
+                    (seasonStart != null)   ? seasonStart   : existing.seasonStart(),
+                    (seasonEnd != null)     ? seasonEnd     : existing.seasonEnd(),
                     existing.dowWindows(),
-                    existing.blockedDays());
+                    existing.blockedDays(),
+                    (maxGamesPerWeek != null) ? maxGamesPerWeek : existing.maxGamesPerWeek(),
+                    (restDays != null)        ? restDays        : existing.minRestDays());
 
                 parent.app.store.save(league.withConfig(updated));
                 System.out.println("League config updated.");
@@ -161,18 +202,34 @@ public class ConfigCommand implements Runnable {
 
                 System.out.println("League Configuration");
                 System.out.println("--------------------");
-                System.out.printf("Sunrise:        %s%n",
+                System.out.printf("Sunrise:          %s%n",
                     (config == null || config.sunriseTime() == null)
                         ? "(not set)" : config.sunriseTime().format(TIME_FORMAT));
-                System.out.printf("Sunset:         %s%n",
+                System.out.printf("Sunset:           %s%n",
                     (config == null || config.sunsetTime() == null)
                         ? "(not set)" : config.sunsetTime().format(TIME_FORMAT));
-                System.out.printf("Season start:   %s%n",
+                System.out.printf("Season start:     %s%n",
                     (config == null || config.seasonStart() == null)
                         ? "(not set)" : config.seasonStart().toString());
-                System.out.printf("Season end:     %s%n",
+                System.out.printf("Season end:       %s%n",
                     (config == null || config.seasonEnd() == null)
                         ? "(not set)" : config.seasonEnd().toString());
+
+                Integer maxGamesPerWeek = (config != null) ? config.maxGamesPerWeek() : null;
+                if (maxGamesPerWeek == null) {
+                    System.out.printf("Max games/week:   %d (default)%n",
+                        SchedulerService.DEFAULT_MAX_GAMES_PER_WEEK);
+                } else {
+                    System.out.printf("Max games/week:   %d%n", maxGamesPerWeek);
+                }
+
+                Integer minRestDays = (config != null) ? config.minRestDays() : null;
+                if (minRestDays == null) {
+                    System.out.printf("Min rest days:    %d (default)%n",
+                        SchedulerService.DEFAULT_MIN_REST_DAYS);
+                } else {
+                    System.out.printf("Min rest days:    %d%n", minRestDays);
+                }
 
                 System.out.println();
                 System.out.println("Day-of-week windows:");

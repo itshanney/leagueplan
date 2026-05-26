@@ -20,7 +20,7 @@ class TeamScheduleServiceTest {
 
     private static final LeagueConfig VALID_CONFIG = new LeagueConfig(
         LocalTime.of(9, 0), LocalTime.of(18, 0),
-        LocalDate.of(2026, 6, 1), LocalDate.of(2026, 8, 31), List.of(), List.of());
+        LocalDate.of(2026, 6, 1), LocalDate.of(2026, 8, 31), List.of(), List.of(), null, null);
 
     // ---------------------------------------------------------------------------
     // Helpers
@@ -313,7 +313,7 @@ class TeamScheduleServiceTest {
         Team a = team("A"), b = team("B");
         Division div = division("Majors", 1, a, b);
         LeagueConfig noDateConfig = new LeagueConfig(
-            LocalTime.of(9, 0), LocalTime.of(18, 0), null, null, List.of(), List.of());
+            LocalTime.of(9, 0), LocalTime.of(18, 0), null, null, List.of(), List.of(), null, null);
         assertInstanceOf(TeamScheduleResult.Failure.class, generate(league(noDateConfig, div)));
     }
 

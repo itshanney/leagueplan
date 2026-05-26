@@ -14,6 +14,7 @@ import org.leagueplan.planr.model.DayOfWeekWindow;
 import org.leagueplan.planr.model.Field;
 import org.leagueplan.planr.model.FieldBlock;
 import org.leagueplan.planr.model.FieldDateOverride;
+import org.leagueplan.planr.model.FieldDivisionLock;
 import org.leagueplan.planr.model.League;
 import org.leagueplan.planr.model.LeagueConfig;
 import org.leagueplan.planr.model.ScheduledGame;
@@ -33,6 +34,9 @@ import java.util.Map;
 import java.util.UUID;
 
 public class SchedulerService {
+
+    public static final int DEFAULT_MAX_GAMES_PER_WEEK = 2;
+    public static final int DEFAULT_MIN_REST_DAYS = 1;
 
     private static final int BUFFER_MINUTES = 15;
     private static final int GRID_MINUTES = 15;
@@ -107,6 +111,8 @@ public class SchedulerService {
              date = date.plusDays(1)) {
 
             for (Field field : league.fields()) {
+                if (isFieldLockedToOtherDivision(field, date, divisionId)) continue;
+                if (isDivisionPinnedElsewhere(league, field, date, divisionId)) continue;
                 LocalTime[] openWindow = resolveOpenWindow(config, field, date);
                 if (openWindow == null) continue;
 
@@ -156,6 +162,8 @@ public class SchedulerService {
                 List<LocalTime[]> available = subtractBlocks(openWindow[0], openWindow[1], dateBlocks);
 
                 for (UUID divId : slotsByDiv.keySet()) {
+                    if (isFieldLockedToOtherDivision(field, currentDate, divId)) continue;
+                    if (isDivisionPinnedElsewhere(league, field, currentDate, divId)) continue;
                     int duration = divisionDuration(league, divId);
                     for (LocalTime[] window : available) {
                         LocalTime slotStart = window[0];
@@ -169,6 +177,30 @@ public class SchedulerService {
             }
         }
         return slotsByDiv;
+    }
+
+    private boolean isFieldLockedToOtherDivision(Field field, LocalDate date, UUID divisionId) {
+        for (FieldDivisionLock lock : field.divisionLocks()) {
+            if (!lock.divisionId().equals(divisionId)
+                    && !date.isBefore(lock.startDate())
+                    && !date.isAfter(lock.endDate())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // When a division owns a lock on some other field for this date, it is pinned to that
+    // field and must not receive slots from currentField. This enforces the bidirectional
+    // lock contract: the owning division plays only on its locked field during the lock period.
+    private boolean isDivisionPinnedElsewhere(League league, Field currentField,
+                                               LocalDate date, UUID divisionId) {
+        return league.fields().stream()
+            .filter(f -> !f.id().equals(currentField.id()))
+            .anyMatch(f -> f.divisionLocks().stream()
+                .anyMatch(lock -> lock.divisionId().equals(divisionId)
+                    && !date.isBefore(lock.startDate())
+                    && !date.isAfter(lock.endDate())));
     }
 
     /**
@@ -363,12 +395,47 @@ public class SchedulerService {
         IntVar totalAssignedVar = model.newIntVar(0, totalFixtures, "total_assigned");
         model.addEquality(totalAssignedVar, LinearExpr.sum(allAssignedLits));
 
-        // Week-load constraint: track max games any team plays in a single ISO week
-        IntVar maxWeekLoad = model.newIntVar(0, totalFixtures, "max_week_load");
+        LeagueConfig config = league.config();
+        int weekCap = (config != null && config.maxGamesPerWeek() != null)
+            ? config.maxGamesPerWeek() : DEFAULT_MAX_GAMES_PER_WEEK;
+        int restDays = (config != null && config.minRestDays() != null)
+            ? config.minRestDays() : DEFAULT_MIN_REST_DAYS;
+
+        // C4: No team plays more than weekCap games in a single ISO week (hard cap).
+        // maxWeekLoad is kept as a soft secondary objective to incentivize even distribution
+        // within the cap.
+        IntVar maxWeekLoad = model.newIntVar(0, weekCap, "max_week_load");
         for (List<GameVar> weekVars : byTeamWeek.values()) {
             if (!weekVars.isEmpty()) {
                 Literal[] lits = weekVars.stream().map(gv -> (Literal) gv.var()).toArray(Literal[]::new);
+                model.addLessOrEqual(LinearExpr.sum(lits), LinearExpr.constant(weekCap));
                 model.addLessOrEqual(LinearExpr.sum(lits), maxWeekLoad);
+            }
+        }
+
+        // C5: Each team must have at least restDays calendar days between any two games.
+        // C3 already enforces the same-day case, so only r >= 1 is needed here.
+        // Each (teamId|date, teamId|(date+r)) pair has at most 2 literals because C3 limits
+        // each team to at most one game per day, keeping constraint count manageable.
+        if (restDays > 0) {
+            for (Map.Entry<String, List<GameVar>> entry : byTeamDate.entrySet()) {
+                if (entry.getValue().isEmpty()) continue;
+                String[] parts = entry.getKey().split("\\|", 2);
+                String teamIdStr = parts[0];
+                LocalDate date = LocalDate.parse(parts[1]);
+
+                for (int r = 1; r <= restDays; r++) {
+                    List<GameVar> nextDayVars = byTeamDate.getOrDefault(
+                        teamIdStr + "|" + date.plusDays(r), List.of());
+                    if (nextDayVars.isEmpty()) continue;
+
+                    List<Literal> combined = new ArrayList<>();
+                    entry.getValue().forEach(gv -> combined.add(gv.var()));
+                    nextDayVars.forEach(gv -> combined.add(gv.var()));
+                    if (combined.size() > 1) {
+                        model.addAtMostOne(combined.toArray(Literal[]::new));
+                    }
+                }
             }
         }
 

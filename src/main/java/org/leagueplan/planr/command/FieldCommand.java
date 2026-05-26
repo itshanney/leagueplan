@@ -24,7 +24,8 @@ import java.util.concurrent.Callable;
         FieldCommand.DeleteCmd.class,
         FieldCommand.ListCmd.class,
         FieldBlockCommand.class,
-        FieldOverrideCommand.class
+        FieldOverrideCommand.class,
+        FieldLockCommand.class
     },
     mixinStandardHelpOptions = true
 )
@@ -62,7 +63,7 @@ public class FieldCommand implements Runnable {
                     System.err.printf("Error: Field \"%s\" already exists.%n", name);
                     return 1;
                 }
-                Field field = new Field(UUID.randomUUID(), name, address, List.of(), List.of());
+                Field field = new Field(UUID.randomUUID(), name, address, List.of(), List.of(), List.of());
                 parent.app.store.save(league.withFieldAdded(field));
                 System.out.printf("Field \"%s\" added.%n", name);
                 return 0;
@@ -124,7 +125,7 @@ public class FieldCommand implements Runnable {
             // Empty string clears the address; null means unchanged.
             String resolvedAddress = (newAddress == null) ? field.address()
                                    : (newAddress.isBlank() ? null : newAddress);
-            return new Field(field.id(), resolvedName, resolvedAddress, field.blocks(), field.dateOverrides());
+            return new Field(field.id(), resolvedName, resolvedAddress, field.blocks(), field.dateOverrides(), field.divisionLocks());
         }
     }
 
@@ -147,9 +148,11 @@ public class FieldCommand implements Runnable {
                 }
                 int blockCount = existing.get().blocks().size();
                 int overrideCount = existing.get().dateOverrides().size();
+                int lockCount = existing.get().divisionLocks().size();
                 parent.app.store.save(league.withFieldRemoved(existing.get().id()));
-                System.out.printf("Field \"%s\" deleted (%d block(s), %d override(s) removed).%n",
-                    existing.get().name(), blockCount, overrideCount);
+                System.out.printf(
+                    "Field \"%s\" deleted (%d block(s), %d override(s), %d lock(s) removed).%n",
+                    existing.get().name(), blockCount, overrideCount, lockCount);
                 return 0;
             } catch (IOException e) {
                 System.err.printf("Error: Failed to access league data: %s%n", e.getMessage());
@@ -194,17 +197,22 @@ public class FieldCommand implements Runnable {
                 fields.stream()
                     .mapToInt(f -> String.valueOf(f.dateOverrides().size()).length())
                     .max().orElse(0));
+            int locksWidth = Math.max("LOCKS".length(),
+                fields.stream()
+                    .mapToInt(f -> String.valueOf(f.divisionLocks().size()).length())
+                    .max().orElse(0));
 
             String fmt = "%-" + nameWidth + "s    %-" + addressWidth + "s    %-"
-                + blocksWidth + "s    %-" + overridesWidth + "s%n";
-            System.out.printf(fmt, "NAME", "ADDRESS", "BLOCKS", "OVERRIDES");
+                + blocksWidth + "s    %-" + overridesWidth + "s    %-" + locksWidth + "s%n";
+            System.out.printf(fmt, "NAME", "ADDRESS", "BLOCKS", "OVERRIDES", "LOCKS");
             System.out.printf(fmt, "-".repeat(nameWidth), "-".repeat(addressWidth),
-                "-".repeat(blocksWidth), "-".repeat(overridesWidth));
+                "-".repeat(blocksWidth), "-".repeat(overridesWidth), "-".repeat(locksWidth));
             fields.forEach(f -> System.out.printf(fmt,
                 f.name(),
                 f.address() == null ? "(none)" : f.address(),
                 f.blocks().size(),
-                f.dateOverrides().size()));
+                f.dateOverrides().size(),
+                f.divisionLocks().size()));
         }
     }
 }

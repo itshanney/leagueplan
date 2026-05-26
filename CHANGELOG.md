@@ -4,6 +4,65 @@ All notable changes to `planr` are documented here. Each entry references the pr
 
 ---
 
+## [0.8.0] — Scheduling Constraints & Field Division Locks
+
+**PRD:** `features/2026-05-25-scheduling-constraints.md`  
+**Spec:** `specs/2026-05-25-scheduling-constraints.md`
+
+Adds three new scheduling constraints: a per-team weekly game cap, a minimum rest-day gap between a team's games, and date-range field division locks. The first two are stored as nullable `Integer` fields on `LeagueConfig` and enforced as hard CP-SAT constraints inside `SchedulerService`. The third introduces a new `FieldDivisionLock` record on each `Field`; it is bidirectional — it excludes other divisions from the locked field and pins the owning division to it during the lock period (E1 errata). Schema advances from v5 to v6.
+
+### Added
+
+- **`planr config set --max-games-per-week <N>`** — Sets a hard cap on the number of games any team may be scheduled in a single ISO calendar week. Validated as a positive integer (≥ 1). Stored as a nullable `Integer` on `LeagueConfig`; null means "use the system default of 2." Merges with other config fields on each `set` call.
+
+- **`planr config set --rest-days <N>`** — Sets the minimum number of calendar days that must separate any two games for the same team. Validated as a non-negative integer (≥ 0; 0 disables the rest constraint). Stored as a nullable `Integer` on `LeagueConfig`; null means "use the system default of 1."
+
+- **`planr field lock add --field <name> --division <name> --start <YYYY-MM-DD> --end <YYYY-MM-DD>`** — Locks a field to a single division for an inclusive date range. Field and division names are resolved case-insensitively. Rejects malformed dates, end-before-start, unknown field or division, and any new range that overlaps an existing lock on the same field (lists conflicting lock indices in the error message). Bidirectional: during the lock period the locked field is unavailable to other divisions, and the owning division may only use its locked field (not unlocked fields).
+
+- **`planr field lock delete --field <name> --index <N>`** — Deletes a lock by 1-based index. Confirms the deleted lock's field name, resolved division name, and date range. Errors if the field has no locks, or if the index is out of range.
+
+- **`planr field lock list [--field <name>]`** — Lists all field division locks in a `FIELD`, `#`, `DIVISION`, `START`, `END` table sorted by field name then start date. Optional `--field` filter restricts output to one field. Shows a distinct empty-state message when no filter is applied vs. when the named field has no locks. Division names are resolved live; shows `[unknown]` if the division was deleted after the lock was created.
+
+- **`FieldDivisionLock` record** — `(UUID divisionId, LocalDate startDate, LocalDate endDate)`. No `id` field; identified by field name + 1-based index within `field.divisionLocks()`, consistent with `FieldBlock`. Serialized by the existing `JavaTimeModule`.
+
+- **`SchedulerService.DEFAULT_MAX_GAMES_PER_WEEK = 2`** and **`DEFAULT_MIN_REST_DAYS = 1`** — Public constants used by both the solver (as fallback defaults) and `ConfigCommand.ShowCmd` (to render the `(default)` label).
+
+### Changed
+
+- **`planr config show`** — Renders two new lines after `Season end:`: `Max games/week: <N>` and `Min rest days: <N>`. Each line appends `(default)` when the value has not been explicitly configured; no suffix when explicitly set.
+
+- **`planr schedule assign`** — Prints active constraint config before the confirmation prompt: `Scheduling constraints: max N game(s)/week per team, min N rest day(s) between games.` After the constraint summary, prints any field division locks that overlap the season window.
+
+- **`LeagueConfig` record** — Gains two new nullable fields: `Integer maxGamesPerWeek` (position 7) and `Integer minRestDays` (position 8). Compact constructor leaves both as `null` (does not normalize to defaults, so `config show` can distinguish "not set" from "explicitly set to the default value"). New mutation helpers: `withMaxGamesPerWeek(Integer)` and `withMinRestDays(Integer)`.
+
+- **`Field` record** — Gains `List<FieldDivisionLock> divisionLocks` as the sixth parameter. Compact constructor normalizes `null` to `List.of()`. New mutation helpers: `withLockAdded(FieldDivisionLock)` and `withLockRemoved(int zeroBasedIndex)`.
+
+- **`SchedulerService.buildAndSolve()`** — Two new hard CP-SAT constraint groups:
+  - **C4 (max games per week):** for each `(team, ISO week)` pair, `sum(assigned vars) ≤ weekCap`. The existing soft `maxWeekLoad` minimization objective is preserved alongside the new hard cap.
+  - **C5 (minimum rest days):** for each team and each pair of dates `(D, D+r)` where `r ∈ [1, restDays]`, adds `addAtMostOne` on the combined set of game vars for those two dates. Because C3 already limits each team to at most one game per day, each combined group has at most 2 literals — O(teams × dates × restDays) constraints, each trivial.
+
+- **`SchedulerService.enumerateAllSlots()` and `estimateAvailableSlots()`** — Both methods now apply bidirectional field lock filtering. In addition to skipping fields locked to other divisions, they skip fields that are not locked to the current division when that division has an active lock on some other field for that date (i.e., the division is pinned to its own locked field).
+
+- **`FieldCommand`** — Registers `FieldLockCommand` as a subcommand. `AddCmd` updated to pass an empty `divisionLocks` list to the `Field` constructor. `EditCmd.applyEdits()` threads `field.divisionLocks()` through unchanged. `ListCmd` adds a `LOCKS` column.
+
+- **`LeagueStore`** — v<4 migration updated to pass an empty `divisionLocks` list to `Field` constructors. New v5→v6 migration block: no-op version stamp. `Field.divisionLocks` absent from older JSON is normalized to `List.of()` by the compact constructor; `LeagueConfig.maxGamesPerWeek` and `minRestDays` absent from older JSON deserialize as `null` (use default).
+
+- **`League.CURRENT_VERSION`** — Advanced from `5` to `6`.
+
+### Tests
+
+- **`FieldLockCommandTest`** — 22 tests across `Add`, `Delete`, and `ListCmd` nested classes: success, lock number increment, field/division not found, invalid date formats, end-before-start, single-day lock accepted, overlap detection (reports conflicting index numbers), consecutive non-overlapping locks accepted, case-insensitive field and division lookup, empty-list error on delete, index out of range, field-filter on list, filter for nonexistent field, I/O errors throughout.
+
+- **`ConfigCommandTest`** additions — 13 new tests: `--max-games-per-week` valid/zero/negative; `--rest-days` valid (including 0)/negative; both options together; persistence to `config show`; `config show` renders `Max games/week` and `Min rest days` fields; `(default)` label when unset; no `(default)` label when explicitly set for each field.
+
+- **`SchedulerServiceTest`** additions — 13 new tests:
+  - **C4:** configured week cap of 1 is enforced across all teams; default cap of 2 is respected.
+  - **C5:** default 1-day rest is enforced (no back-to-back games); `restDays=0` produces a complete valid schedule.
+  - **Field division lock (exclusion side):** locked field gives 0 slots to non-owning division; locked field gives same slots to owning division as an unlocked field; partial-period lock opens the field to other divisions outside the lock window; locked field's games belong only to the owning division.
+  - **E1 (bidirectional pinning):** all owning division games assigned to the locked field only; adding an unlocked field does not increase slot count for the pinned division; pinning releases after the lock date range expires (slot count doubles in the post-lock period); division locked to two different fields in sequential periods receives slots from each field only during its respective period; two divisions each pinned to their own field use only their assigned field — no game lands on the shared open field.
+
+---
+
 ## [0.7.0] — League-Wide Day-of-Week Availability Windows & Blocked Days
 
 **PRD:** `features/2026-05-25-league-wide-availability-config.md`  

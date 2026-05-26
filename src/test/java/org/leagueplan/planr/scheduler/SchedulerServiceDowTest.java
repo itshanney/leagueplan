@@ -53,11 +53,11 @@ class SchedulerServiceDowTest {
     // ---------------------------------------------------------------------------
 
     private static Field fieldWithNoEntries(String name) {
-        return new Field(UUID.randomUUID(), name, null, List.of(), List.of());
+        return new Field(UUID.randomUUID(), name, null, List.of(), List.of(), List.of());
     }
 
     private static Field fieldWithOverride(String name, FieldDateOverride override) {
-        return new Field(UUID.randomUUID(), name, null, List.of(), List.of(override));
+        return new Field(UUID.randomUUID(), name, null, List.of(), List.of(override), List.of());
     }
 
     private static Division division(String name) {
@@ -97,7 +97,7 @@ class SchedulerServiceDowTest {
         void blockedDayYieldsZeroSlots() {
             // Season = June 7 (Sunday) only; Sunday is blocked
             LeagueConfig config = new LeagueConfig(T9, T18, SUNDAY, SUNDAY,
-                List.of(), List.of(DayOfWeek.SUNDAY));
+                List.of(), List.of(DayOfWeek.SUNDAY), null, null);
             League league = leagueFor(config, fieldWithNoEntries("Field A"));
 
             int slots = service.estimateAvailableSlots(league, divId(league), GAME_DURATION);
@@ -109,13 +109,13 @@ class SchedulerServiceDowTest {
         void blockedDayIsOmittedFromMultiDaySeason() {
             // Season = June 1 (Mon) – June 7 (Sun); Sunday is blocked → 6 eligible days
             LeagueConfig config = new LeagueConfig(T9, T18, MONDAY, SUNDAY,
-                List.of(), List.of(DayOfWeek.SUNDAY));
+                List.of(), List.of(DayOfWeek.SUNDAY), null, null);
             League league = leagueFor(config, fieldWithNoEntries("Field A"));
 
             int slotsWithBlock = service.estimateAvailableSlots(league, divId(league), GAME_DURATION);
 
             // Compare against identical league without the block
-            LeagueConfig noBlock = new LeagueConfig(T9, T18, MONDAY, SUNDAY, List.of(), List.of());
+            LeagueConfig noBlock = new LeagueConfig(T9, T18, MONDAY, SUNDAY, List.of(), List.of(), null, null);
             League leagueNoBlock = leagueFor(noBlock, fieldWithNoEntries("Field A"));
             int slotsWithoutBlock = service.estimateAvailableSlots(leagueNoBlock, divId(leagueNoBlock), GAME_DURATION);
 
@@ -131,7 +131,7 @@ class SchedulerServiceDowTest {
             LeagueConfig config = new LeagueConfig(T9, T18, MONDAY, SUNDAY,
                 List.of(),
                 List.of(DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY,
-                        DayOfWeek.THURSDAY, DayOfWeek.FRIDAY, DayOfWeek.SATURDAY, DayOfWeek.SUNDAY));
+                        DayOfWeek.THURSDAY, DayOfWeek.FRIDAY, DayOfWeek.SATURDAY, DayOfWeek.SUNDAY), null, null);
             League league = leagueFor(config, fieldWithNoEntries("Field A"));
 
             assertEquals(0, service.estimateAvailableSlots(league, divId(league), GAME_DURATION));
@@ -155,7 +155,7 @@ class SchedulerServiceDowTest {
             Field field = fieldWithOverride("Field A", override);
 
             LeagueConfig config = new LeagueConfig(T9, T18, SUNDAY, SUNDAY,
-                List.of(), List.of(DayOfWeek.SUNDAY));
+                List.of(), List.of(DayOfWeek.SUNDAY), null, null);
             League league = leagueFor(config, field);
 
             int slots = service.estimateAvailableSlots(league, divId(league), GAME_DURATION);
@@ -173,7 +173,7 @@ class SchedulerServiceDowTest {
             Field field = fieldWithOverride("Field A", override);
 
             LeagueConfig config = new LeagueConfig(T9, T18, SUNDAY, SUNDAY,
-                List.of(), List.of(DayOfWeek.SUNDAY));
+                List.of(), List.of(DayOfWeek.SUNDAY), null, null);
             League league = leagueFor(config, field);
 
             int slots = service.estimateAvailableSlots(league, divId(league), GAME_DURATION);
@@ -200,7 +200,7 @@ class SchedulerServiceDowTest {
             // Monday window: 16:00–21:00 (5 hours instead of global 09:00–18:00)
             DayOfWeekWindow monWindow = new DayOfWeekWindow(DayOfWeek.MONDAY, LocalTime.of(16, 0), T21);
             LeagueConfig config = new LeagueConfig(T9, T18, MONDAY, MONDAY,
-                List.of(monWindow), List.of());
+                List.of(monWindow), List.of(), null, null);
             League league = leagueFor(config, fieldWithNoEntries("Field A"));
 
             int slots = service.estimateAvailableSlots(league, divId(league), GAME_DURATION);
@@ -215,7 +215,7 @@ class SchedulerServiceDowTest {
             // Wednesday window; season is only Monday — window should have no effect
             DayOfWeekWindow wedWindow = new DayOfWeekWindow(DayOfWeek.WEDNESDAY, LocalTime.of(16, 0), T21);
             LeagueConfig config = new LeagueConfig(T9, T18, MONDAY, MONDAY,
-                List.of(wedWindow), List.of());
+                List.of(wedWindow), List.of(), null, null);
             League league = leagueFor(config, fieldWithNoEntries("Field A"));
 
             int slots = service.estimateAvailableSlots(league, divId(league), GAME_DURATION);
@@ -230,10 +230,10 @@ class SchedulerServiceDowTest {
             // Season = June 1 (Mon) – June 7 (Sun); Wednesday window narrows Wed only
             DayOfWeekWindow wedWindow = new DayOfWeekWindow(DayOfWeek.WEDNESDAY, LocalTime.of(16, 0), T21);
             LeagueConfig configWithWindow = new LeagueConfig(T9, T18, MONDAY, SUNDAY,
-                List.of(wedWindow), List.of());
+                List.of(wedWindow), List.of(), null, null);
             League leagueWithWindow = leagueFor(configWithWindow, fieldWithNoEntries("Field A"));
 
-            LeagueConfig configNoWindow = new LeagueConfig(T9, T18, MONDAY, SUNDAY, List.of(), List.of());
+            LeagueConfig configNoWindow = new LeagueConfig(T9, T18, MONDAY, SUNDAY, List.of(), List.of(), null, null);
             League leagueNoWindow = leagueFor(configNoWindow, fieldWithNoEntries("Field A"));
 
             int slotsWithWindow  = service.estimateAvailableSlots(leagueWithWindow, divId(leagueWithWindow), GAME_DURATION);
@@ -265,7 +265,7 @@ class SchedulerServiceDowTest {
             FieldDateOverride override = new FieldDateOverride(UUID.randomUUID(), SUNDAY, T9, T13);
             Field field = fieldWithOverride("Field A", override);
 
-            LeagueConfig config = new LeagueConfig(T9, T18, SUNDAY, SUNDAY, List.of(sunWindow), List.of());
+            LeagueConfig config = new LeagueConfig(T9, T18, SUNDAY, SUNDAY, List.of(sunWindow), List.of(), null, null);
             League league = leagueFor(config, field);
 
             int slots = service.estimateAvailableSlots(league, divId(league), GAME_DURATION);
@@ -279,7 +279,7 @@ class SchedulerServiceDowTest {
         void dowWindowBeatsGlobal() {
             // Sunday window narrows from global 09:00–18:00 to 16:00–21:00
             DayOfWeekWindow sunWindow = new DayOfWeekWindow(DayOfWeek.SUNDAY, LocalTime.of(16, 0), T21);
-            LeagueConfig config = new LeagueConfig(T9, T18, SUNDAY, SUNDAY, List.of(sunWindow), List.of());
+            LeagueConfig config = new LeagueConfig(T9, T18, SUNDAY, SUNDAY, List.of(sunWindow), List.of(), null, null);
             League league = leagueFor(config, fieldWithNoEntries("Field A"));
 
             int slots = service.estimateAvailableSlots(league, divId(league), GAME_DURATION);

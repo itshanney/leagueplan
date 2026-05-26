@@ -5,13 +5,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.leagueplan.planr.PlanrApp;
+import org.leagueplan.planr.model.Field;
 import org.leagueplan.planr.model.League;
+import org.leagueplan.planr.model.LeagueConfig;
 import org.leagueplan.planr.model.Schedule;
 import org.leagueplan.planr.model.ScheduleState;
 import org.leagueplan.planr.model.ScheduleStatus;
 import org.leagueplan.planr.model.ScheduledGame;
 import org.leagueplan.planr.model.TeamGame;
 import org.leagueplan.planr.model.TeamSchedule;
+import org.leagueplan.planr.model.FieldDivisionLock;
 import org.leagueplan.planr.scheduler.DivisionSummary;
 import org.leagueplan.planr.scheduler.ScheduleResult;
 import org.leagueplan.planr.scheduler.SchedulerService;
@@ -198,6 +201,15 @@ public class ScheduleCommand implements Runnable {
                         });
                 }
 
+                LeagueConfig assignConfig = league.config();
+                int effectiveWeekCap = (assignConfig != null && assignConfig.maxGamesPerWeek() != null)
+                    ? assignConfig.maxGamesPerWeek() : SchedulerService.DEFAULT_MAX_GAMES_PER_WEEK;
+                int effectiveRestDays = (assignConfig != null && assignConfig.minRestDays() != null)
+                    ? assignConfig.minRestDays() : SchedulerService.DEFAULT_MIN_REST_DAYS;
+                System.out.printf(
+                    "Scheduling constraints: max %d game(s)/week per team, min %d rest day(s) between games.%n",
+                    effectiveWeekCap, effectiveRestDays);
+
                 System.out.print("Confirm this team schedule and begin field assignment? "
                     + "This may take up to 5 minutes. Type 'yes' to continue: ");
                 System.out.flush();
@@ -224,6 +236,7 @@ public class ScheduleCommand implements Runnable {
                 ScheduleResult.Success success = (ScheduleResult.Success) result;
 
                 printConstraintSummary(success.divisionSummaries());
+                printActiveConstraints(league, effectiveWeekCap, effectiveRestDays);
 
                 if (!success.targetMet()) {
                     printTeamShortfall(
@@ -700,6 +713,32 @@ public class ScheduleCommand implements Runnable {
 
         System.out.printf("%-" + teamW + "s  %" + homeW + "d  %" + awayW + "d  %" + totalW + "d%n",
             "TOTAL", totalHome, totalAway, totalHome + totalAway);
+    }
+
+    static void printActiveConstraints(League league, int weekCap, int restDays) {
+        System.out.printf(
+            "Active constraints: max %d game(s)/week per team, min %d rest day(s) between games.%n",
+            weekCap, restDays);
+
+        LeagueConfig config = league.config();
+        if (config == null || config.seasonStart() == null || config.seasonEnd() == null) return;
+
+        List<String> lockLines = new ArrayList<>();
+        for (Field field : league.fields()) {
+            for (FieldDivisionLock lock : field.divisionLocks()) {
+                // Only report locks that overlap the season window
+                if (!lock.startDate().isAfter(config.seasonEnd())
+                        && !lock.endDate().isBefore(config.seasonStart())) {
+                    String divName = FieldLockCommand.resolveDivisionName(league, lock.divisionId());
+                    lockLines.add(String.format("  \"%s\" → %s (%s to %s)",
+                        field.name(), divName, lock.startDate(), lock.endDate()));
+                }
+            }
+        }
+        if (!lockLines.isEmpty()) {
+            System.out.println("Field division locks applied:");
+            lockLines.forEach(System.out::println);
+        }
     }
 
     static void printConstraintSummary(List<DivisionSummary> summaries) {
