@@ -1,3 +1,6 @@
 package org.leagueplan.planr.model;
 
-public enum PracticeState { GENERATED, ASSIGNED }
+public enum PracticeState {
+  GENERATED,
+  ASSIGNED
+}

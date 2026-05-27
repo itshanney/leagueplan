@@ -14,15 +14,23 @@ public record PlayoffGame(
     LocalTime assignedStartTime,
     UUID assignedFieldId,
     boolean isConditional,
-    boolean isBye
-) {
-    public PlayoffGame withAssignment(LocalDate date, LocalTime startTime, UUID fieldId) {
-        return new PlayoffGame(gameId, round, bracketSide, positionA, positionB,
-            date, startTime, fieldId, isConditional, isBye);
-    }
+    boolean isBye) {
+  public PlayoffGame withAssignment(LocalDate date, LocalTime startTime, UUID fieldId) {
+    return new PlayoffGame(
+        gameId,
+        round,
+        bracketSide,
+        positionA,
+        positionB,
+        date,
+        startTime,
+        fieldId,
+        isConditional,
+        isBye);
+  }
 
-    public PlayoffGame withAssignmentCleared() {
-        return new PlayoffGame(gameId, round, bracketSide, positionA, positionB,
-            null, null, null, isConditional, isBye);
-    }
+  public PlayoffGame withAssignmentCleared() {
+    return new PlayoffGame(
+        gameId, round, bracketSide, positionA, positionB, null, null, null, isConditional, isBye);
+  }
 }

@@ -17,31 +17,29 @@ public record ScheduledGame(
     UUID divisionId,
     String divisionName,
     int gameDurationMinutes,
-    boolean overridden
-) {
-    public ScheduledGame withOverride(
-            LocalDate newDate,
-            LocalTime newStartTime,
-            UUID newFieldId,
-            String newFieldName,
-            UUID newHomeTeamId,
-            String newHomeTeamName,
-            UUID newAwayTeamId,
-            String newAwayTeamName) {
-        return new ScheduledGame(
-            id,
-            newDate != null ? newDate : date,
-            newStartTime != null ? newStartTime : startTime,
-            newFieldId != null ? newFieldId : fieldId,
-            newFieldName != null ? newFieldName : fieldName,
-            newHomeTeamId != null ? newHomeTeamId : homeTeamId,
-            newHomeTeamName != null ? newHomeTeamName : homeTeamName,
-            newAwayTeamId != null ? newAwayTeamId : awayTeamId,
-            newAwayTeamName != null ? newAwayTeamName : awayTeamName,
-            divisionId,
-            divisionName,
-            gameDurationMinutes,
-            true
-        );
-    }
+    boolean overridden) {
+  public ScheduledGame withOverride(
+      LocalDate newDate,
+      LocalTime newStartTime,
+      UUID newFieldId,
+      String newFieldName,
+      UUID newHomeTeamId,
+      String newHomeTeamName,
+      UUID newAwayTeamId,
+      String newAwayTeamName) {
+    return new ScheduledGame(
+        id,
+        newDate != null ? newDate : date,
+        newStartTime != null ? newStartTime : startTime,
+        newFieldId != null ? newFieldId : fieldId,
+        newFieldName != null ? newFieldName : fieldName,
+        newHomeTeamId != null ? newHomeTeamId : homeTeamId,
+        newHomeTeamName != null ? newHomeTeamName : homeTeamName,
+        newAwayTeamId != null ? newAwayTeamId : awayTeamId,
+        newAwayTeamName != null ? newAwayTeamName : awayTeamName,
+        divisionId,
+        divisionName,
+        gameDurationMinutes,
+        true);
+  }
 }

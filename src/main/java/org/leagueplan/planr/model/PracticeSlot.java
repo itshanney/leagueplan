@@ -10,13 +10,12 @@ public record PracticeSlot(
     int slotNumber,
     LocalDate assignedDate,
     LocalTime assignedStartTime,
-    UUID assignedFieldId
-) {
-    public PracticeSlot withAssignment(LocalDate date, LocalTime startTime, UUID fieldId) {
-        return new PracticeSlot(slotId, teamId, slotNumber, date, startTime, fieldId);
-    }
+    UUID assignedFieldId) {
+  public PracticeSlot withAssignment(LocalDate date, LocalTime startTime, UUID fieldId) {
+    return new PracticeSlot(slotId, teamId, slotNumber, date, startTime, fieldId);
+  }
 
-    public PracticeSlot withAssignmentCleared() {
-        return new PracticeSlot(slotId, teamId, slotNumber, null, null, null);
-    }
+  public PracticeSlot withAssignmentCleared() {
+    return new PracticeSlot(slotId, teamId, slotNumber, null, null, null);
+  }
 }

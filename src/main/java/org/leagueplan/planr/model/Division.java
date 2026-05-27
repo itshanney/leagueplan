@@ -15,47 +15,73 @@ public record Division(
     Integer practiceCount,
     Integer practiceDurationMinutes,
     LocalDate practiceStart,
-    LocalDate practiceEnd
-) {
+    LocalDate practiceEnd) {
 
-    public Optional<Team> findTeam(String name) {
-        return teams.stream()
-            .filter(t -> t.name().equalsIgnoreCase(name))
-            .findFirst();
-    }
+  public Optional<Team> findTeam(String name) {
+    return teams.stream().filter(t -> t.name().equalsIgnoreCase(name)).findFirst();
+  }
 
-    public boolean hasTeam(String name) {
-        return findTeam(name).isPresent();
-    }
+  public boolean hasTeam(String name) {
+    return findTeam(name).isPresent();
+  }
 
-    public boolean isPracticeConfigured() {
-        return practiceCount != null
-            && practiceDurationMinutes != null
-            && practiceStart != null
-            && practiceEnd != null;
-    }
+  public boolean isPracticeConfigured() {
+    return practiceCount != null
+        && practiceDurationMinutes != null
+        && practiceStart != null
+        && practiceEnd != null;
+  }
 
-    public Division withTeamAdded(Team team) {
-        return new Division(id, this.name, gameDurationMinutes, targetGamesPerTeam,
-            Stream.concat(teams.stream(), Stream.of(team)).toList(),
-            practiceCount, practiceDurationMinutes, practiceStart, practiceEnd);
-    }
+  public Division withTeamAdded(Team team) {
+    return new Division(
+        id,
+        this.name,
+        gameDurationMinutes,
+        targetGamesPerTeam,
+        Stream.concat(teams.stream(), Stream.of(team)).toList(),
+        practiceCount,
+        practiceDurationMinutes,
+        practiceStart,
+        practiceEnd);
+  }
 
-    public Division withTeamReplaced(UUID teamId, Team replacement) {
-        return new Division(id, this.name, gameDurationMinutes, targetGamesPerTeam,
-            teams.stream().map(t -> t.id().equals(teamId) ? replacement : t).toList(),
-            practiceCount, practiceDurationMinutes, practiceStart, practiceEnd);
-    }
+  public Division withTeamReplaced(UUID teamId, Team replacement) {
+    return new Division(
+        id,
+        this.name,
+        gameDurationMinutes,
+        targetGamesPerTeam,
+        teams.stream().map(t -> t.id().equals(teamId) ? replacement : t).toList(),
+        practiceCount,
+        practiceDurationMinutes,
+        practiceStart,
+        practiceEnd);
+  }
 
-    public Division withTeamRemoved(UUID teamId) {
-        return new Division(id, this.name, gameDurationMinutes, targetGamesPerTeam,
-            teams.stream().filter(t -> !t.id().equals(teamId)).toList(),
-            practiceCount, practiceDurationMinutes, practiceStart, practiceEnd);
-    }
+  public Division withTeamRemoved(UUID teamId) {
+    return new Division(
+        id,
+        this.name,
+        gameDurationMinutes,
+        targetGamesPerTeam,
+        teams.stream().filter(t -> !t.id().equals(teamId)).toList(),
+        practiceCount,
+        practiceDurationMinutes,
+        practiceStart,
+        practiceEnd);
+  }
 
-    public Division withPracticeConfig(Integer count, Integer durationMinutes,
-            LocalDate start, LocalDate end) {
-        return new Division(id, name, gameDurationMinutes, targetGamesPerTeam, teams,
-            count, durationMinutes, start, end);
-    }
+  public Division withPracticeConfig(
+      Integer count, Integer durationMinutes, LocalDate start, LocalDate end) {
+    return new Division(
+        id,
+        name,
+        gameDurationMinutes,
+        targetGamesPerTeam,
+        teams,
+        count,
+        durationMinutes,
+        start,
+        end);
+  }
 }

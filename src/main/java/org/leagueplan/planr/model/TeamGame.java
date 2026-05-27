@@ -11,13 +11,17 @@ public record TeamGame(
     String awayTeamName,
     UUID divisionId,
     String divisionName,
-    int gameDurationMinutes
-) {
-    public TeamGame withSwappedHomeAway() {
-        return new TeamGame(id, gameNumber,
-            awayTeamId, awayTeamName,
-            homeTeamId, homeTeamName,
-            divisionId, divisionName,
-            gameDurationMinutes);
-    }
+    int gameDurationMinutes) {
+  public TeamGame withSwappedHomeAway() {
+    return new TeamGame(
+        id,
+        gameNumber,
+        awayTeamId,
+        awayTeamName,
+        homeTeamId,
+        homeTeamName,
+        divisionId,
+        divisionName,
+        gameDurationMinutes);
+  }
 }

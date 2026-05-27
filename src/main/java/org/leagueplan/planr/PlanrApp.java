@@ -16,32 +16,31 @@ import picocli.CommandLine.Spec;
 @Command(
     name = "planr",
     subcommands = {
-        DivisionCommand.class,
-        TeamCommand.class,
-        FieldCommand.class,
-        ScheduleCommand.class,
-        ConfigCommand.class,
-        PlayoffCommand.class,
-        PracticeCommand.class,
-        CommandLine.HelpCommand.class
+      DivisionCommand.class,
+      TeamCommand.class,
+      FieldCommand.class,
+      ScheduleCommand.class,
+      ConfigCommand.class,
+      PlayoffCommand.class,
+      PracticeCommand.class,
+      CommandLine.HelpCommand.class
     },
     description = "League Planner — schedule management for little league organizers.",
     mixinStandardHelpOptions = true,
-    version = "planr 0.10.0"
-)
+    version = "planr 0.10.0")
 public class PlanrApp implements Runnable {
 
-    @Spec CommandSpec spec;
+  @Spec CommandSpec spec;
 
-    public final LeagueStore store = new LeagueStore();
+  public final LeagueStore store = new LeagueStore();
 
-    @Override
-    public void run() {
-        spec.commandLine().usage(System.out);
-    }
+  @Override
+  public void run() {
+    spec.commandLine().usage(System.out);
+  }
 
-    public static void main(String[] args) {
-        int exitCode = new CommandLine(new PlanrApp()).execute(args);
-        System.exit(exitCode);
-    }
+  public static void main(String[] args) {
+    int exitCode = new CommandLine(new PlanrApp()).execute(args);
+    System.exit(exitCode);
+  }
 }

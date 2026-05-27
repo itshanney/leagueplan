@@ -5,22 +5,22 @@ import java.util.Map;
 import java.util.UUID;
 
 public sealed interface PracticeScheduleResult
-        permits PracticeScheduleResult.Success, PracticeScheduleResult.Failure {
+    permits PracticeScheduleResult.Success, PracticeScheduleResult.Failure {
 
-    record Success(
-        Map<UUID, Slot> assignmentsBySlotId,
-        boolean optimal,
-        List<DivisionSummary> divisionSummaries
-    ) implements PracticeScheduleResult {}
+  record Success(
+      Map<UUID, Slot> assignmentsBySlotId, boolean optimal, List<DivisionSummary> divisionSummaries)
+      implements PracticeScheduleResult {}
 
-    record Failure(String message) implements PracticeScheduleResult {}
+  record Failure(String message) implements PracticeScheduleResult {}
 
-    static Success success(Map<UUID, Slot> assignmentsBySlotId, boolean optimal,
-            List<DivisionSummary> divisionSummaries) {
-        return new Success(assignmentsBySlotId, optimal, divisionSummaries);
-    }
+  static Success success(
+      Map<UUID, Slot> assignmentsBySlotId,
+      boolean optimal,
+      List<DivisionSummary> divisionSummaries) {
+    return new Success(assignmentsBySlotId, optimal, divisionSummaries);
+  }
 
-    static Failure failure(String message) {
-        return new Failure(message);
-    }
+  static Failure failure(String message) {
+    return new Failure(message);
+  }
 }

@@ -9,17 +9,16 @@ public record Playoff(
     LocalDate startDate,
     LocalDate endDate,
     PlayoffState state,
-    List<PlayoffGame> games
-) {
-    public Playoff {
-        games = (games == null) ? List.of() : games;
-    }
+    List<PlayoffGame> games) {
+  public Playoff {
+    games = (games == null) ? List.of() : games;
+  }
 
-    public Playoff withState(PlayoffState newState) {
-        return new Playoff(divisionId, startDate, endDate, newState, games);
-    }
+  public Playoff withState(PlayoffState newState) {
+    return new Playoff(divisionId, startDate, endDate, newState, games);
+  }
 
-    public Playoff withGames(List<PlayoffGame> newGames) {
-        return new Playoff(divisionId, startDate, endDate, state, newGames);
-    }
+  public Playoff withGames(List<PlayoffGame> newGames) {
+    return new Playoff(divisionId, startDate, endDate, state, newGames);
+  }
 }
