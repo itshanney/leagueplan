@@ -101,7 +101,7 @@ Each command test class runs the full picocli dispatch stack, reads/writes real 
 | `ScheduleCommandTest.java` | 98 | `schedule generate/assign/status/clear` — full scheduling lifecycle, phase 1 matchup table, phase 2 CP-SAT assignment, per-division summaries |
 | `ScheduleCommandStatsTest.java` | 23 | `schedule stats` — per-team game counts, home/away balance display |
 | `PlayoffCommandTest.java` | 36 | `playoff generate/status/clear` — bracket generation for all N in [2,16], BYE display, conditional marker, lifecycle, two-division independence |
-| `PracticeCommandTest.java` | 34 | `practice generate/view/clear` — per-division practice slots, skip logic, NOT_CONFIGURED/NOT_STARTED/GENERATED states, confirmation cancel/accept; sort-order: unassigned by team name, assigned before unassigned, assigned by date ASC, same-date by time ASC |
+| `PracticeCommandTest.java` | 36 | `practice generate/view/clear` — per-division practice slots, skip logic, NOT_CONFIGURED/NOT_STARTED/GENERATED states, confirmation cancel/accept; sort-order: unassigned by team name (primary key), teams in alpha order regardless of date, within-team date ASC, within-team same-date time ASC, assigned before unassigned |
 
 ---
 
@@ -160,5 +160,5 @@ Both commands involve an interactive confirmation prompt followed by a CP-SAT so
 | Model unit tests | 3 | 52 |
 | Scheduler unit tests | 6 | 206 |
 | Store tests | 1 | 19 |
-| Command end-to-end tests | 15 | 499 |
-| **Total** | **25** | **776** |
+| Command end-to-end tests | 15 | 501 |
+| **Total** | **25** | **778** |

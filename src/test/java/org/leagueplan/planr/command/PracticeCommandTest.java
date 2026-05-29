@@ -109,6 +109,48 @@ class PracticeCommandTest extends CommandTestBase {
     store.save(league);
   }
 
+  /**
+   * Injects assignments at the individual slot level using (teamName, slotNumber) as the lookup
+   * key. Used for within-team ordering tests where a single team has multiple practice slots at
+   * different dates or times.
+   */
+  private void injectPracticeAssignmentsBySlotNumber(
+      String divisionName,
+      Map<String, Map<Integer, LocalDate>> datesByTeamAndSlot,
+      Map<String, Map<Integer, LocalTime>> timesByTeamAndSlot)
+      throws IOException {
+    LeagueStore store = new LeagueStore();
+    League league = store.load();
+    Division division = league.findDivision(divisionName).orElseThrow();
+    PracticeSchedule ps = league.findPracticeSchedule(division.id()).orElseThrow();
+
+    List<PracticeSlot> updatedSlots =
+        ps.slots().stream()
+            .map(
+                slot -> {
+                  String teamName =
+                      division.teams().stream()
+                          .filter(t -> t.id().equals(slot.teamId()))
+                          .findFirst()
+                          .map(Team::name)
+                          .orElse("");
+                  LocalDate date =
+                      datesByTeamAndSlot.getOrDefault(teamName, Map.of()).get(slot.slotNumber());
+                  if (date == null) return slot;
+                  LocalTime time =
+                      timesByTeamAndSlot
+                          .getOrDefault(teamName, Map.of())
+                          .getOrDefault(slot.slotNumber(), LocalTime.of(10, 0));
+                  return slot.withAssignment(date, time, null);
+                })
+            .toList();
+
+    league =
+        league.withPracticeScheduleReplaced(
+            division.id(), ps.withSlots(updatedSlots).withState(PracticeState.ASSIGNED));
+    store.save(league);
+  }
+
   // ---------------------------------------------------------------------------
   // practice generate
   // ---------------------------------------------------------------------------
@@ -315,15 +357,50 @@ class PracticeCommandTest extends CommandTestBase {
     }
 
     @Test
-    @DisplayName("slot numbers appear as '1 of N' and '2 of N'")
-    void slotNumbersAreCorrect() {
+    @DisplayName("detail table does not include a PRACTICE column")
+    void noPracticeColumn() {
       addConfiguredDivision("Majors", 2);
       addTeams("Majors", "Blue Jays");
       execute("practice", "generate");
 
       execute("practice", "view", "--division", "Majors");
-      assertTrue(stdout().contains("1 of 2"));
-      assertTrue(stdout().contains("2 of 2"));
+      assertFalse(stdout().contains("PRACTICE"), "detail table must not have a PRACTICE column header");
+    }
+
+    @Test
+    @DisplayName("detail table has exactly the columns TEAM DATE TIME FIELD")
+    void detailTableHasExpectedColumns() {
+      addConfiguredDivision("Majors", 1);
+      addTeams("Majors", "Blue Jays", "Cardinals");
+      execute("practice", "generate");
+
+      execute("practice", "view", "--division", "Majors");
+      String out = stdout();
+      assertTrue(out.contains("TEAM"), "TEAM column must be present");
+      assertTrue(out.contains("DATE"), "DATE column must be present");
+      assertTrue(out.contains("TIME"), "TIME column must be present");
+      assertTrue(out.contains("FIELD"), "FIELD column must be present");
+      assertFalse(out.contains("PRACTICE"), "PRACTICE column must not be present");
+    }
+
+    @Test
+    @DisplayName("within a team, unassigned slots trail the team's assigned slots")
+    void withinTeamUnassignedSlotsTrailAssignedSlots() throws IOException {
+      addConfiguredDivision("Majors", 2); // 2 practices per team
+      addTeams("Majors", "Team A");
+      execute("practice", "generate");
+
+      // Only slot 1 is assigned; slot 2 stays unassigned
+      injectPracticeAssignmentsBySlotNumber(
+          "Majors",
+          Map.of("Team A", Map.of(1, LocalDate.of(2026, 4, 10))),
+          Map.of("Team A", Map.of(1, LocalTime.of(10, 0))));
+
+      execute("practice", "view", "--division", "Majors");
+      String out = stdout();
+      assertTrue(
+          out.indexOf("2026-04-10") < out.indexOf("UNASSIGNED"),
+          "assigned slot should appear before the team's unassigned slot");
     }
 
     @Test
@@ -387,45 +464,62 @@ class PracticeCommandTest extends CommandTestBase {
     }
 
     @Test
-    @DisplayName("assigned slots are sorted by date ascending")
-    void assignedSlotsSortedByDateAscending() throws IOException {
+    @DisplayName("teams appear in alphabetical order regardless of their assigned dates")
+    void teamsAppearInAlphabeticalOrderRegardlessOfAssignedDates() throws IOException {
       addConfiguredDivision("Majors", 1);
-      addTeams("Majors", "Alpha", "Beta", "Gamma");
+      addTeams("Majors", "Gamma", "Alpha", "Beta"); // added in non-alphabetical order
       execute("practice", "generate");
 
+      // Gamma gets the earliest date, Alpha the latest — team name must still dominate
       injectPracticeAssignments(
           "Majors",
           Map.of(
-              "Alpha", LocalDate.of(2026, 4, 15),
-              "Beta", LocalDate.of(2026, 4, 10),
-              "Gamma", LocalDate.of(2026, 4, 20)),
+              "Gamma", LocalDate.of(2026, 4, 10),
+              "Alpha", LocalDate.of(2026, 4, 20),
+              "Beta", LocalDate.of(2026, 4, 15)),
           Map.of(
+              "Gamma", LocalTime.of(10, 0),
               "Alpha", LocalTime.of(10, 0),
-              "Beta", LocalTime.of(10, 0),
-              "Gamma", LocalTime.of(10, 0)));
+              "Beta", LocalTime.of(10, 0)));
 
       execute("practice", "view", "--division", "Majors");
       String out = stdout();
-      int apr10 = out.indexOf("2026-04-10");
-      int apr15 = out.indexOf("2026-04-15");
-      int apr20 = out.indexOf("2026-04-20");
-      assertTrue(apr10 >= 0 && apr15 >= 0 && apr20 >= 0, "all three dates should appear");
-      assertTrue(apr10 < apr15, "2026-04-10 before 2026-04-15");
-      assertTrue(apr15 < apr20, "2026-04-15 before 2026-04-20");
+      assertTrue(out.indexOf("Alpha") < out.indexOf("Beta"), "Alpha before Beta");
+      assertTrue(out.indexOf("Beta") < out.indexOf("Gamma"), "Beta before Gamma");
     }
 
     @Test
-    @DisplayName("slots on the same date are sorted by start time ascending")
-    void slotsOnSameDateSortedByStartTimeAscending() throws IOException {
-      addConfiguredDivision("Majors", 1);
-      addTeams("Majors", "Team A", "Team B");
+    @DisplayName("within a team, practices are sorted by date ascending")
+    void withinTeamPracticesSortedByDateAscending() throws IOException {
+      addConfiguredDivision("Majors", 2); // 2 practices per team
+      addTeams("Majors", "Team A");
       execute("practice", "generate");
 
-      // Team A gets 14:00, Team B gets 09:00 — output should be Team B first
-      injectPracticeAssignments(
+      // Slot 1 gets the later date, slot 2 gets the earlier date — earlier must appear first
+      injectPracticeAssignmentsBySlotNumber(
           "Majors",
-          Map.of("Team A", LocalDate.of(2026, 4, 10), "Team B", LocalDate.of(2026, 4, 10)),
-          Map.of("Team A", LocalTime.of(14, 0), "Team B", LocalTime.of(9, 0)));
+          Map.of("Team A", Map.of(1, LocalDate.of(2026, 4, 15), 2, LocalDate.of(2026, 4, 10))),
+          Map.of("Team A", Map.of(1, LocalTime.of(10, 0), 2, LocalTime.of(10, 0))));
+
+      execute("practice", "view", "--division", "Majors");
+      String out = stdout();
+      assertTrue(
+          out.indexOf("2026-04-10") < out.indexOf("2026-04-15"),
+          "earlier date should appear first within a team");
+    }
+
+    @Test
+    @DisplayName("within a team, slots on the same date are sorted by start time ascending")
+    void withinTeamSlotsOnSameDateSortedByStartTimeAscending() throws IOException {
+      addConfiguredDivision("Majors", 2); // 2 practices per team
+      addTeams("Majors", "Team A");
+      execute("practice", "generate");
+
+      // Slot 1 gets 14:00, slot 2 gets 09:00 — earlier time must appear first
+      injectPracticeAssignmentsBySlotNumber(
+          "Majors",
+          Map.of("Team A", Map.of(1, LocalDate.of(2026, 4, 10), 2, LocalDate.of(2026, 4, 10))),
+          Map.of("Team A", Map.of(1, LocalTime.of(14, 0), 2, LocalTime.of(9, 0))));
 
       execute("practice", "view", "--division", "Majors");
       String out = stdout();

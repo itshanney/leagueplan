@@ -1,7 +1,6 @@
 package org.leagueplan.planr.command;
 
 import java.io.IOException;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -344,13 +343,13 @@ public class PracticeCommand implements Runnable {
 
     private void printDetail(PracticeSchedule ps, Division division, League league) {
       Comparator<PracticeSlot> slotOrder =
-          Comparator.<PracticeSlot, LocalDate>comparing(
+          Comparator.<PracticeSlot, String>comparing(
+                  s -> resolveTeamName(division, s.teamId()), String.CASE_INSENSITIVE_ORDER)
+              .thenComparing(
                   PracticeSlot::assignedDate, Comparator.nullsLast(Comparator.naturalOrder()))
               .thenComparing(
                   PracticeSlot::assignedStartTime,
-                  Comparator.nullsLast(Comparator.naturalOrder()))
-              .thenComparing(
-                  s -> resolveTeamName(division, s.teamId()), String.CASE_INSENSITIVE_ORDER);
+                  Comparator.nullsLast(Comparator.naturalOrder()));
       List<PracticeSlot> slots = ps.slots().stream().sorted(slotOrder).toList();
 
       int teamW =
@@ -358,13 +357,6 @@ public class PracticeCommand implements Runnable {
               "TEAM".length(),
               slots.stream()
                   .mapToInt(s -> resolveTeamName(division, s.teamId()).length())
-                  .max()
-                  .orElse(0));
-      int pracW =
-          Math.max(
-              "PRACTICE".length(),
-              slots.stream()
-                  .mapToInt(s -> pracLabel(s, division.practiceCount()).length())
                   .max()
                   .orElse(0));
       int dateW = Math.max("DATE".length(), "UNASSIGNED".length());
@@ -379,20 +371,17 @@ public class PracticeCommand implements Runnable {
                   .orElse(0));
 
       String fmt =
-          "%-" + teamW + "s  %-" + pracW + "s  %-" + dateW + "s  %-" + timeW + "s  %-" + fieldW
-              + "s%n";
-      System.out.printf(fmt, "TEAM", "PRACTICE", "DATE", "TIME", "FIELD");
+          "%-" + teamW + "s  %-" + dateW + "s  %-" + timeW + "s  %-" + fieldW + "s%n";
+      System.out.printf(fmt, "TEAM", "DATE", "TIME", "FIELD");
       System.out.printf(
           fmt,
           "-".repeat(teamW),
-          "-".repeat(pracW),
           "-".repeat(dateW),
           "-".repeat(timeW),
           "-".repeat(fieldW));
 
       for (PracticeSlot slot : slots) {
         String teamName = resolveTeamName(division, slot.teamId());
-        String prac = pracLabel(slot, division.practiceCount());
         String date;
         String time;
         String field;
@@ -408,12 +397,8 @@ public class PracticeCommand implements Runnable {
           time = "--";
           field = "--";
         }
-        System.out.printf(fmt, teamName, prac, date, time, field);
+        System.out.printf(fmt, teamName, date, time, field);
       }
-    }
-
-    private static String pracLabel(PracticeSlot slot, Integer totalCount) {
-      return slot.slotNumber() + " of " + (totalCount != null ? totalCount : "?");
     }
 
     private static String resolveTeamName(Division division, UUID teamId) {

@@ -143,6 +143,70 @@ All slots have `assignedDate = null`. The `nullsLast` comparator pushes all of t
 
 ---
 
+## Errata
+
+### E-1 — Sort order correction: team name is primary key, not tertiary
+
+**Filed:** 2026-05-29
+
+**Original sort order (incorrect):**
+
+1. Assigned date ASC (nulls last)
+2. Assigned start time ASC (nulls last)
+3. Team name ASC (case-insensitive) — tiebreaker only
+
+**Corrected sort order:**
+
+1. **Team name ASC (case-insensitive)** — primary key; groups all practices for one team together
+2. **Assigned date ASC (nulls last)** — secondary key; within a team, chronological order
+3. **Assigned start time ASC (nulls last)** — tertiary key; same-day tiebreaker
+
+**Rationale:** The original spec described the date-first ordering as matching "a schedule view." However, the primary consumer of `planr practice view --division <name>` is a team manager checking their own team's practice assignments, not a field scheduler looking at day-level conflicts. Grouping by team first (then date within the team) makes each team's practice block contiguous and immediately readable. A field operator who wants date-ordered output would use `planr schedule view` or a filtered export instead.
+
+**Unassigned slots:** the `nullsLast` on date pushes unassigned slots to the bottom of each team's group. With the corrected order, all of Team A's unassigned slots trail Team A's assigned slots before Team B's rows begin.
+
+**Corrected comparator (pseudocode):**
+
+```
+Comparator.comparing(slot -> resolveTeamName(division, slot.teamId()),
+    String.CASE_INSENSITIVE_ORDER)
+  .thenComparing(slot -> slot.assignedDate(),
+    Comparator.nullsLast(Comparator.naturalOrder()))
+  .thenComparing(slot -> slot.assignedStartTime(),
+    Comparator.nullsLast(Comparator.naturalOrder()))
+```
+
+**Files requiring correction (relative to original implementation checklist):**
+
+- `PracticeCommand.java` — swap comparator key order in `printDetail()`
+- `PracticeCommandTest.java` — update sort-order tests to assert team-grouped output (date-order assertions within a single team remain valid; cross-team date-order assertions must be removed or rewritten)
+
+### E-2 — PRACTICE column: remove entirely from detail view
+
+**Filed:** 2026-05-29  
+**Revised:** 2026-05-29
+
+**Original column (to be removed):**
+
+The `PRACTICE` column in `planr practice view --division <name>` displays `"N of M"` (e.g. `"1 of 2"`, `"2 of 2"`). With the team-grouped sort from E-1 it was first simplified to display only the slot number, but on further review the column is not needed at all.
+
+**Corrected table columns:**
+
+```
+TEAM  DATE  TIME  FIELD
+```
+
+The `PRACTICE` column is dropped. `TEAM / DATE / TIME / FIELD` is sufficient: the team-grouped sort already makes the practice sequence self-evident by position within each team's block.
+
+**Rationale:** The `"N of M"` suffix conveyed two things — which practice within the team's sequence this is, and how many total practices the team has. Both are now derivable by inspection once practices are grouped per team. Removing the column simplifies the table and eliminates the now-dead `pracLabel()` helper and `pracW` width calculation entirely.
+
+**Files requiring correction:**
+
+- `PracticeCommand.java` — remove `pracLabel()` method; remove `pracW` variable and its column from the format string and header; remove `prac` local variable from the per-slot loop body
+- `PracticeCommandTest.java` — delete `slotNumbersAreCorrect` test entirely (the column it tested no longer exists); add a guard assertion in `ViewDetail` that stdout does NOT contain `"PRACTICE"` as a header
+
+---
+
 ## Out of Scope / Future Work
 
 - Adding `--team` or `--field` filter flags (matching `planr schedule view`): deferred; out of scope for this change.
