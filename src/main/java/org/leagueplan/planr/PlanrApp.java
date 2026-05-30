@@ -1,5 +1,6 @@
 package org.leagueplan.planr;
 
+import org.leagueplan.planr.command.CalendarCommand;
 import org.leagueplan.planr.command.ConfigCommand;
 import org.leagueplan.planr.command.DivisionCommand;
 import org.leagueplan.planr.command.FieldCommand;
@@ -23,11 +24,12 @@ import picocli.CommandLine.Spec;
       ConfigCommand.class,
       PlayoffCommand.class,
       PracticeCommand.class,
+      CalendarCommand.class,
       CommandLine.HelpCommand.class
     },
     description = "League Planner — schedule management for little league organizers.",
     mixinStandardHelpOptions = true,
-    version = "planr 0.10.3")
+    version = "planr 0.11.0")
 public class PlanrApp implements Runnable {
 
   @Spec CommandSpec spec;

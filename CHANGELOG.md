@@ -4,6 +4,53 @@ All notable changes to `planr` are documented here. Each entry references the pr
 
 ---
 
+## [0.11.0] — Unified Calendar View
+
+**PRD:** `features/2026-05-29-calendar-view.md`  
+**Spec:** `specs/2026-05-29-calendar-view.md`
+
+Adds `planr calendar`, a new top-level read-only command that renders all assigned schedule events — regular-season games, playoff games, and practice slots — in a unified ASCII calendar. Two layout modes are supported: a weekly day-by-day listing (default) and a monthly grid with a per-day event-count display followed by a full chronological event listing. The same `--division`, `--team`, and `--field` filters available on `planr schedule view` apply here. No data model changes, no JSON schema version bump.
+
+### Added
+
+- **`planr calendar [--weekly | --monthly]`** — Renders a unified calendar of all assigned events. `--weekly` (default) shows a 7-day Sunday-through-Saturday block with events listed under each day, sorted by start time then type (game → playoff → practice) then division and description. `--monthly` renders a traditional calendar grid followed by a full chronological event listing for the month. Defaults to the earliest week or month containing at least one assigned event when no date is specified.
+
+- **`--week <YYYY-MM-DD>`** (weekly mode only) — Selects the target week; any date within the week may be supplied. The calendar always shows the Sunday-through-Saturday window containing that date.
+
+- **`--month <YYYY-MM>`** (monthly mode only) — Selects the target month.
+
+- **`--division <name>` / `--team <name>` / `--field <name>`** — At most one filter may be specified per invocation. All filters are case-insensitive and validated against known entities. When `--team` is used, playoff events are excluded because bracket references (`W of G1`) cannot be matched to a team name before the bracket resolves; use `--division` to include playoff games.
+
+- **Weekly view layout** — Header line: `Week of YYYY-MM-DD (Sun) — YYYY-MM-DD (Sat)`. Each of the 7 days is a section with a `  DOW YYYY-MM-DD` header followed by indented event lines in the format `    HH:MM  [TYPE]  <description>  @  <field>  (<division>)`, or `    (no events)`. `[TYPE]` is `[G]` for regular-season games, `[PO]` for playoff games, `[P]` for practices. Practice event descriptions show only the team name (no "(practice)" suffix). Summary: `N events this week  (G: g  PO: po  P: p)`.
+
+- **Monthly view layout** — Title centered at position 36 for an 80-char terminal. Grid uses Sun–Sat column order with a 5-char left margin and 10-char columns (75 chars total). Each week row is exactly 4 terminal lines: date numbers (right-aligned), game counts (`3G`), practice counts (`2P`), playoff counts (`1PO`) — blank, not `0G`, when a count is zero. All 4 lines are always emitted including rows where all counts are zero. After the grid and legend (`Legend: G = Game   PO = Playoff   P = Practice`), a chronological event listing groups events by date, omitting dates with no events. Summary: `N events in Month YYYY  (G: g  PO: po  P: p)`.
+
+- **`CalendarCommand`** (new file: `src/main/java/org/leagueplan/planr/command/CalendarCommand.java`) — Top-level picocli command; handles argument parsing, entity validation, event collection from all three sources, filter application, and rendering dispatch. Contains two package-private nested types used by the renderer: `CalendarEvent` record (date, time, type, description, fieldName, divisionName, filterTeams) and `EventType` enum (GAME, PLAYOFF, PRACTICE). Event collection resolves field names and team names from the `League` entity via `league.fields()` and division team streams; `ScheduledGame.fieldName` and `ScheduledGame.divisionName` are already denormalized and used directly.
+
+- **`CalendarRenderer`** (new file: `src/main/java/org/leagueplan/planr/command/CalendarRenderer.java`) — Package-private utility class with only static methods. Accepts a `PrintStream` parameter (not `System.out` directly) so rendering is testable without stream capture. Implements `renderWeekly()` and `renderMonthly()`, a shared `EVENT_ORDER` comparator, `toSundayOnOrBefore()` (Sunday-first week arithmetic), and `formatEventLine()`.
+
+### Tests
+
+- **`CalendarRendererTest`** (new file, 41 tests) across `WeeklyView`, `MonthlyGrid`, `MonthlyEventListing`, `ToSundayOnOrBefore`, and `FormatEventLine` nested classes:
+  - **WeeklyView (10):** empty list shows `(no events)` on all 7 days; header uses title-case day abbreviations; day section headers are uppercase; game/playoff/practice event line formats; sort order (time ASC → game < playoff < practice → division → description); tiebreak by division then description; events appear only on their correct day; summary counts each type.
+  - **MonthlyGrid (11):** title centered at column 36; column header positions for all 7 days; May 2026 produces 6 week rows of 4 lines each; fixed-height invariant for all-zero rows; day numbers right-aligned by column; game count in Sat column; practice count in Fri and Tue columns; playoff count in Sat column; zero count is blank not `0G`; out-of-month cells are blank; month-starting-on-Sunday has no leading blank cells.
+  - **MonthlyEventListing (6):** dates in ascending order; dates with no events omitted; day headers are uppercase; events within a day sorted by time then type; event format matches weekly view; empty list renders cleanly with zero-count summary.
+  - **ToSundayOnOrBefore (5):** Sunday maps to itself; Monday maps back 1; Saturday maps back 6; all 7 days in one week map to the same Sunday; month-boundary crossing.
+  - **FormatEventLine (4):** game `[G]` format with 4-space indent; playoff `[PO]` format; practice `[P]` format with team name only; time zero-padded.
+
+- **`CalendarCommandTest`** (new file, 39 tests) across `ArgumentValidation`, `EntityValidation`, `NoAssignedEvents`, `WeeklyView`, `MonthlyView`, `FilterByDivision`, `FilterByTeam`, `FilterByField`, and `CalendarCommand.toWeekStart` nested classes:
+  - **ArgumentValidation (10):** `--weekly`/`--monthly` mutual exclusion; all three two-filter combinations; `--week` with `--monthly`; `--month` without `--monthly`; `--month` with explicit `--weekly`; invalid month format; impossible month value; non-numeric month.
+  - **EntityValidation (3):** unknown division, team, and field each exit 1.
+  - **NoAssignedEvents (3):** fresh league exits 1; team schedule only (no Phase 2) exits 1; corrupted data exits 2.
+  - **WeeklyView (5):** exits 0 with week header after assign; `[G]` events appear; event lines contain home/away/field/division; `--week` outside the season shows all `(no events)`; summary is non-zero after assign.
+  - **MonthlyView (3):** exits 0 with month title and legend; out-of-season month shows zero-count summary; summary line counts games.
+  - **FilterByDivision (3):** only named division's events shown; case-insensitive; teamless division exits 1.
+  - **FilterByTeam (3):** only named team's events shown; case-insensitive; playoff events excluded from team filter.
+  - **FilterByField (3):** only named field's events shown; case-insensitive; post-assignment injected field exits 1.
+  - **toWeekStart (4):** Sunday maps to itself; Saturday maps back 6; all 7 days map to same Sunday; `toWeekStart` and `CalendarRenderer.toSundayOnOrBefore` agree on all inputs.
+
+---
+
 ## [0.10.2] — `planr practice view` Rename and Sort Fix
 
 **Spec:** `specs/2026-05-29-practice-view-rename-and-sort.md`
